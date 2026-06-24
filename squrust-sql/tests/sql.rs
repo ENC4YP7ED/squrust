@@ -413,3 +413,33 @@ async fn scalar_and_aggregate_minmax() {
     assert_eq!(r[0][0], Value::Integer(2));
     assert_eq!(r[0][1], Value::Integer(9));
 }
+
+#[tokio::test]
+async fn group_concat_aggregate() {
+    let eng = engine().await;
+    eng.execute_ddl("CREATE TABLE t(g INTEGER, x TEXT)").await.unwrap();
+    eng.execute("INSERT INTO t VALUES (1,'a'),(1,'b'),(1,NULL),(1,'c'),(2,'z')", &[])
+        .await
+        .unwrap();
+
+    // Default separator is ',', NULLs skipped, grouped.
+    let r = rows(&eng, "SELECT group_concat(x) FROM t GROUP BY g", &[]).await;
+    assert_eq!(r[0][0], Value::Text("a,b,c".into()));
+    assert_eq!(r[1][0], Value::Text("z".into()));
+
+    // Custom separator.
+    let r = rows(&eng, "SELECT group_concat(x, '-') FROM t WHERE g = 1", &[]).await;
+    assert_eq!(r[0][0], Value::Text("a-b-c".into()));
+
+    // DISTINCT.
+    eng.execute_ddl("CREATE TABLE d(x TEXT)").await.unwrap();
+    eng.execute("INSERT INTO d VALUES ('a'),('a'),('b')", &[]).await.unwrap();
+    let r = rows(&eng, "SELECT group_concat(DISTINCT x) FROM d", &[]).await;
+    assert_eq!(r[0][0], Value::Text("a,b".into()));
+
+    // A group with only NULLs (or no rows) yields NULL, not empty text.
+    eng.execute_ddl("CREATE TABLE n(x TEXT)").await.unwrap();
+    eng.execute("INSERT INTO n VALUES (NULL),(NULL)", &[]).await.unwrap();
+    let r = rows(&eng, "SELECT group_concat(x) FROM n", &[]).await;
+    assert_eq!(r[0][0], Value::Null);
+}

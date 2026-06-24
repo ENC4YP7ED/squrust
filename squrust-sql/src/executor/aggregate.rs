@@ -73,7 +73,17 @@ impl AggExec {
                     Some(arg) => eval(arg, &row.values, row.row_id, &self.params)?,
                     None => Value::Null,
                 };
-                group.accs[ai].update(agg, v);
+                // group_concat's separator is evaluated per row (defaults to ",").
+                let sep = if agg.func == AggFunc::GroupConcat {
+                    Some(match &agg.sep {
+                        Some(e) => eval(e, &row.values, row.row_id, &self.params)?
+                            .to_display_string(),
+                        None => ",".to_string(),
+                    })
+                } else {
+                    None
+                };
+                group.accs[ai].update(agg, v, sep);
             }
         }
 
@@ -166,10 +176,12 @@ struct Acc {
     sum_seen: bool,
     extreme: Option<Value>,
     distinct: Vec<Value>,
+    gc: String,
+    gc_seen: bool,
 }
 
 impl Acc {
-    fn update(&mut self, agg: &AggExpr, v: Value) {
+    fn update(&mut self, agg: &AggExpr, v: Value, sep: Option<String>) {
         match agg.func {
             AggFunc::CountStar => self.count += 1,
             _ => {
@@ -205,6 +217,13 @@ impl Acc {
                             self.extreme = Some(v);
                         }
                     }
+                    AggFunc::GroupConcat => {
+                        if self.gc_seen {
+                            self.gc.push_str(sep.as_deref().unwrap_or(","));
+                        }
+                        self.gc.push_str(&v.to_display_string());
+                        self.gc_seen = true;
+                    }
                     AggFunc::CountStar => unreachable!(),
                 }
             }
@@ -233,6 +252,13 @@ impl Acc {
                 }
             }
             AggFunc::Min | AggFunc::Max => self.extreme.clone().unwrap_or(Value::Null),
+            AggFunc::GroupConcat => {
+                if self.gc_seen {
+                    Value::Text(self.gc.clone())
+                } else {
+                    Value::Null
+                }
+            }
         }
     }
 }

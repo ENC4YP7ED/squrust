@@ -57,7 +57,7 @@ pub struct ResolveCtx {
 pub fn is_aggregate_name(name: &str) -> bool {
     matches!(
         name.to_ascii_uppercase().as_str(),
-        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "TOTAL"
+        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "TOTAL" | "GROUP_CONCAT"
     )
 }
 

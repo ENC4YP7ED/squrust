@@ -37,6 +37,7 @@ pub enum AggFunc {
     Avg,
     Min,
     Max,
+    GroupConcat,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,9 @@ pub struct AggExpr {
     pub func: AggFunc,
     pub arg: Option<Expr>,
     pub distinct: bool,
+    /// `group_concat`'s optional separator expression (2nd argument). `None`
+    /// means the default `,`. Ignored by every other aggregate.
+    pub sep: Option<Expr>,
 }
 
 /// One output column of an aggregate node.
@@ -618,6 +622,7 @@ fn try_aggregate(e: &SqlExpr, scope: &Scope, ctx: &mut ResolveCtx) -> Result<Opt
             func: AggFunc::CountStar,
             arg: None,
             distinct,
+            sep: None,
         }));
     }
 
@@ -630,18 +635,34 @@ fn try_aggregate(e: &SqlExpr, scope: &Scope, ctx: &mut ResolveCtx) -> Result<Opt
             )));
         }
     };
+
+    // group_concat(X [, SEP]) — the optional 2nd argument is the separator.
+    let sep = if name == "GROUP_CONCAT" {
+        match args.get(1) {
+            Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(e))) => {
+                Some(resolve_expr(e, scope, ctx)?)
+            }
+            None => None,
+            _ => return Err(SqlError::Unsupported("separator to group_concat".into())),
+        }
+    } else {
+        None
+    };
+
     let func = match name.as_str() {
         "COUNT" => AggFunc::Count,
         "SUM" | "TOTAL" => AggFunc::Sum,
         "AVG" => AggFunc::Avg,
         "MIN" => AggFunc::Min,
         "MAX" => AggFunc::Max,
+        "GROUP_CONCAT" => AggFunc::GroupConcat,
         _ => unreachable!(),
     };
     Ok(Some(AggExpr {
         func,
         arg,
         distinct,
+        sep,
     }))
 }
 
