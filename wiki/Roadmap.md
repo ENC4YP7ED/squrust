@@ -20,7 +20,7 @@ discuss.
 
 ## SQL surface
 
-- More built-ins: date/time functions, `printf`, `glob`, math, JSON1.
+- More built-ins: `printf`, `glob`, math, JSON1.
 - **User-defined functions/collations** through the C API (`create_function`,
   `create_collation`) — currently accepted but inert.
 - Match SQLite's **float text formatting** (15 significant digits) so rendered

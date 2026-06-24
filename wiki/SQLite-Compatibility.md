@@ -94,6 +94,13 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
   `rtrim`, `instr`, `hex`, `char`, `unicode`, `sign`, `quote`, and multi-argument
   `min`/`max` (the two-or-more-arg scalar form — NULL if any argument is NULL;
   single-argument `min`/`max` are the aggregates above).
+- **Date/time functions:** `date`, `time`, `datetime`, `julianday`, `unixepoch`,
+  `strftime` — a faithful port of SQLite's `date.c`, byte-identical on the
+  supported time strings (`'now'`, ISO `YYYY-MM-DD[ T]HH:MM[:SS[.FFF]][Z]`, raw
+  Julian-day / unix numbers) and modifiers (`±N {second…year}`, `start of
+  {day,month,year}`, `weekday N`, `unixepoch`, `±HH:MM`, `subsec`), including the
+  full `strftime` code set. `utc`/`localtime` are identity transforms (UTC only;
+  no timezone database).
 
 ### Limitations
 
@@ -109,7 +116,7 @@ These are **not** implemented yet (a non-exhaustive list):
   foreign keys, triggers, views, `AUTOINCREMENT` semantics (plain rowid
   allocation is used).
 - **User-defined functions / collations**, most `PRAGMA`s (parsed as no-ops),
-  date/time functions, JSON1, FTS, math extensions.
+  JSON1, FTS, math extensions.
 - **Float display** differs from SQLite (Rust's shortest round-trip vs SQLite's
   15-significant-digit formatting) — the **stored value is identical**, only the
   text rendering differs.

@@ -85,7 +85,8 @@ Operators: `TableScan`, `FilterExec`, `ProjectExec`, `NestedLoopJoin`,
 `AggExec` (COUNT/SUM/AVG/MIN/MAX/GROUP_CONCAT + GROUP BY + HAVING), `DistinctExec`,
 `SortExec`, `LimitExec`, and a `DualExec` for `SELECT <expr>` with no `FROM`. `eval.rs` is the expression
 evaluator (arithmetic with three-valued logic, `LIKE`, `IN`, `CASE`, `CAST`, and
-the scalar functions listed in [[SQLite Compatibility]]). DML lives in `dml.rs`
+the scalar functions listed in [[SQLite Compatibility]], plus SQLite-compatible
+date/time functions in `datetime.rs`). DML lives in `dml.rs`
 and runs directly against a `WriteTx`.
 
 ## Supported SQL (today)
