@@ -10,10 +10,11 @@ discuss.
 - **Index b-trees** — build real index b-trees (page types `0x0a`/`0x02`),
   persist them in `sqlite_master`, and use them in the planner for point lookups
   and range scans. Today the executor always table-scans.
-- **Constraint enforcement** — `UNIQUE` and non-rowid `PRIMARY KEY` (currently
-  only the rowid alias is enforced).
+- **Constraint enforcement** — extend `UNIQUE` to `UPDATE`/`DELETE` (enforced on
+  `INSERT` today, by scan) and to non-rowid `PRIMARY KEY`, then back it with
+  index b-trees instead of a full scan.
 - **Joins** — 3+ tables, comma joins, `RIGHT`/`FULL` outer, hash joins.
-- **Subqueries / CTEs / set operations**, `HAVING`, `SELECT DISTINCT`.
+- **Subqueries / CTEs / set operations**.
 - **`ALTER TABLE`**, foreign keys, triggers, views.
 
 ## SQL surface

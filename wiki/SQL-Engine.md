@@ -63,7 +63,8 @@ in-memory schema. `CREATE TABLE` allocates a fresh B-tree root and inserts a
   positional params), expands `SELECT *`, and lowers `BETWEEN`, `CASE`, `CAST`,
   `TRIM`, etc.
 - `mod.rs` builds the `LogicalPlan`:
-  `Scan`, `Filter`, `Project`, `NestedLoopJoin`, `Aggregate`, `Sort`, `Limit`,
+  `Scan`, `Filter`, `Project`, `NestedLoopJoin`, `Aggregate`, `Distinct`,
+  `Sort`, `Limit`,
   plus statement plans for `Insert`/`Update`/`Delete`/`CreateTable`/`CreateIndex`/`DropTable`.
 - `optimizer.rs` does constant folding (deliberately *not* folding `/` and `%`,
   to leave SQLite's integer-vs-real division to the evaluator).
@@ -81,16 +82,17 @@ pub trait Executor: Send {
 ```
 
 Operators: `TableScan`, `FilterExec`, `ProjectExec`, `NestedLoopJoin`,
-`AggExec` (COUNT/SUM/AVG/MIN/MAX + GROUP BY), `SortExec`, `LimitExec`, and a
-`DualExec` for `SELECT <expr>` with no `FROM`. `eval.rs` is the expression
+`AggExec` (COUNT/SUM/AVG/MIN/MAX + GROUP BY + HAVING), `DistinctExec`,
+`SortExec`, `LimitExec`, and a `DualExec` for `SELECT <expr>` with no `FROM`. `eval.rs` is the expression
 evaluator (arithmetic with three-valued logic, `LIKE`, `IN`, `CASE`, `CAST`, and
 the scalar functions listed in [[SQLite Compatibility]]). DML lives in `dml.rs`
 and runs directly against a `WriteTx`.
 
 ## Supported SQL (today)
 
-- `SELECT` with `WHERE`, `ORDER BY` (incl. by ordinal/alias), `LIMIT`/`OFFSET`,
-  `GROUP BY` + aggregates, expressions & scalar functions, `CASE`, `CAST`.
+- `SELECT` / `SELECT DISTINCT` with `WHERE`, `ORDER BY` (incl. by ordinal/alias),
+  `LIMIT`/`OFFSET`, `GROUP BY` + aggregates + `HAVING`, expressions & scalar
+  functions, `CASE`, `CAST`.
 - `INSERT` (incl. `INSERT OR REPLACE`, multi-row `VALUES`), `UPDATE`, `DELETE`.
 - `CREATE TABLE` / `CREATE INDEX` / `DROP TABLE`.
 - Inner and left-outer **two-table** nested-loop joins.

@@ -67,12 +67,16 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
 
 ### Supported
 
-- **DQL:** `SELECT` with `WHERE`, `ORDER BY` (incl. by ordinal and by output
-  alias), `LIMIT`/`OFFSET`, `GROUP BY` + `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`
-  (with `DISTINCT`), expressions, `CASE` (simple & searched), `CAST`.
+- **DQL:** `SELECT` and `SELECT DISTINCT` with `WHERE`, `ORDER BY` (incl. by
+  ordinal and by output alias), `LIMIT`/`OFFSET`, `GROUP BY` + `HAVING` over
+  `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` (each also `(DISTINCT …)`), expressions,
+  `CASE` (simple & searched), `CAST`.
 - **DML:** `INSERT` (multi-row `VALUES`, `INSERT OR REPLACE`), `UPDATE`,
   `DELETE`.
 - **DDL:** `CREATE TABLE`, `CREATE INDEX` (recorded, not yet used), `DROP TABLE`.
+- **Constraints & defaults:** `UNIQUE` enforced on `INSERT`, column `DEFAULT`s
+  (incl. `CURRENT_TIMESTAMP`/`CURRENT_DATE`/`CURRENT_TIME`); a violation raises
+  `SQLITE_CONSTRAINT` (→ Python `sqlite3.IntegrityError`).
 - **Joins:** inner and left-outer, **two tables**, via nested-loop.
 - **Transactions:** `BEGIN`/`COMMIT`/`ROLLBACK` (through the async and C APIs).
 - **Type affinity:** SQLite's rules — BLOB/NONE does no conversion, INTEGER
@@ -84,17 +88,20 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
   `BETWEEN`, `IS [NOT] NULL`.
 - **Scalar functions:** `length`, `upper`, `lower`, `abs`, `round`, `coalesce`,
   `ifnull`, `nullif`, `typeof`, `substr`/`substring`, `replace`, `trim`/`ltrim`/
-  `rtrim`, `instr`, `hex`, `char`, `unicode`, `sign`, `quote`.
+  `rtrim`, `instr`, `hex`, `char`, `unicode`, `sign`, `quote`, and multi-argument
+  `min`/`max` (the two-or-more-arg scalar form — NULL if any argument is NULL;
+  single-argument `min`/`max` are the aggregates above).
 
 ### Limitations
 
 These are **not** implemented yet (a non-exhaustive list):
 
 - **Index usage** — the planner always table-scans; `CREATE INDEX` is accepted
-  but inert, and `UNIQUE`/non-PK constraints aren't enforced.
+  but inert. (`UNIQUE` *is* enforced, but by full scan on `INSERT`, not via an
+  index; non-rowid `PRIMARY KEY` isn't enforced yet.)
 - **Joins beyond two tables**, comma joins, `RIGHT`/`FULL` joins, `USING`.
 - **Subqueries**, CTEs (`WITH`), set operations (`UNION`/`INTERSECT`/`EXCEPT`).
-- **`HAVING`**, `DISTINCT` on `SELECT`, window functions.
+- **Window functions.**
 - **`ALTER TABLE`**, foreign keys, triggers, views, `AUTOINCREMENT` semantics
   (plain rowid allocation is used).
 - **User-defined functions / collations**, most `PRAGMA`s (parsed as no-ops),
