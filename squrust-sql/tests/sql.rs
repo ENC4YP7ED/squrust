@@ -581,3 +581,28 @@ async fn subqueries() {
     let r = rows(&eng, "SELECT id FROM t ORDER BY id", &[]).await;
     assert_eq!(r, vec![vec![Value::Integer(2)]]);
 }
+
+#[tokio::test]
+async fn ctes() {
+    let eng = engine().await;
+    eng.execute_ddl("CREATE TABLE emp(id INTEGER, name TEXT, dept INTEGER, salary INTEGER)").await.unwrap();
+    eng.execute("INSERT INTO emp VALUES (1,'a',10,100),(2,'b',10,200),(3,'c',20,300)", &[]).await.unwrap();
+
+    // Simple CTE referenced in FROM.
+    let r = rows(&eng, "WITH hi AS (SELECT name FROM emp WHERE salary >= 200) SELECT name FROM hi ORDER BY name", &[]).await;
+    assert_eq!(r, vec![vec![Value::Text("b".into())], vec![Value::Text("c".into())]]);
+
+    // CTE with explicit column names + aggregate.
+    let r = rows(&eng, "WITH d(dno, tot) AS (SELECT dept, sum(salary) FROM emp GROUP BY dept) SELECT dno, tot FROM d ORDER BY dno", &[]).await;
+    assert_eq!(r, vec![
+        vec![Value::Integer(10), Value::Integer(300)],
+        vec![Value::Integer(20), Value::Integer(300)],
+    ]);
+
+    // Two CTEs joined.
+    let r = rows(&eng, "WITH a AS (SELECT id, name FROM emp), b AS (SELECT id, salary FROM emp) SELECT a.name, b.salary FROM a JOIN b ON a.id=b.id WHERE b.salary=200", &[]).await;
+    assert_eq!(r, vec![vec![Value::Text("b".into()), Value::Integer(200)]]);
+
+    // Recursive CTEs are rejected.
+    assert!(eng.query("WITH RECURSIVE r AS (SELECT 1 AS x) SELECT x FROM r", &[]).await.is_err());
+}

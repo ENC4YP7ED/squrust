@@ -391,14 +391,35 @@ fn lookup<'a>(catalog: &'a Catalog, name: &str) -> Result<&'a Table> {
         .ok_or_else(|| SqlError::NotFound(format!("table `{name}`")))
 }
 
+/// A named common-table-expression: a pre-planned subquery usable in `FROM`.
+#[derive(Clone)]
+struct CteDef {
+    plan: LogicalPlan,
+    scope: Scope,
+}
+
+type CteMap = std::collections::HashMap<String, CteDef>;
+
 fn plan_query(q: &Query, catalog: &Catalog, ctx: &mut ResolveCtx) -> Result<LogicalPlan> {
+    plan_query_with(q, catalog, ctx, &CteMap::new())
+}
+
+/// Plan a query, with any `WITH` (CTE) clause and inherited CTEs in scope.
+fn plan_query_with(
+    q: &Query,
+    catalog: &Catalog,
+    ctx: &mut ResolveCtx,
+    inherited: &CteMap,
+) -> Result<LogicalPlan> {
+    let ctes = build_ctes(q, catalog, ctx, inherited)?;
+
     let select = match q.body.as_ref() {
         SetExpr::Select(s) => s.as_ref(),
         other => return Err(SqlError::Unsupported(format!("query body: {other}"))),
     };
 
     // Build the FROM source and its scope.
-    let (mut node, scope) = plan_from(select, catalog)?;
+    let (mut node, scope) = plan_from(select, catalog, &ctes)?;
 
     // WHERE
     if let Some(pred) = &select.selection {
@@ -463,6 +484,58 @@ fn plan_query(q: &Query, catalog: &Catalog, ctx: &mut ResolveCtx) -> Result<Logi
     Ok(node)
 }
 
+/// Build the CTE map for a query from its `WITH` clause (plus inherited CTEs).
+/// Each CTE body is planned with earlier CTEs visible. Recursive CTEs are
+/// rejected.
+fn build_ctes(
+    q: &Query,
+    catalog: &Catalog,
+    ctx: &mut ResolveCtx,
+    inherited: &CteMap,
+) -> Result<CteMap> {
+    let mut map = inherited.clone();
+    let with = match &q.with {
+        Some(w) => w,
+        None => return Ok(map),
+    };
+    if with.recursive {
+        return Err(SqlError::Unsupported(
+            "recursive CTEs (WITH RECURSIVE) are not supported".into(),
+        ));
+    }
+    for cte in &with.cte_tables {
+        let plan = plan_query_with(&cte.query, catalog, ctx, &map)?;
+        let mut cols = plan.columns();
+        if !cte.alias.columns.is_empty() {
+            if cte.alias.columns.len() != cols.len() {
+                return Err(SqlError::Schema(format!(
+                    "CTE `{}` declares {} columns but the query returns {}",
+                    cte.alias.name.value,
+                    cte.alias.columns.len(),
+                    cols.len()
+                )));
+            }
+            for (c, ident) in cols.iter_mut().zip(&cte.alias.columns) {
+                c.name = ident.value.clone();
+            }
+        }
+        let name = cte.alias.name.value.clone();
+        let scope = Scope {
+            cols: cols
+                .iter()
+                .map(|c| ScopeCol {
+                    table: Some(name.clone()),
+                    name: c.name.clone(),
+                    sql_type: crate::types::SqlType::Null,
+                    decl_type: c.decl_type.clone(),
+                })
+                .collect(),
+        };
+        map.insert(name.to_ascii_lowercase(), CteDef { plan, scope });
+    }
+    Ok(map)
+}
+
 /// Plan a subquery `(SELECT ...)` into a logical plan. Used by the engine to
 /// pre-evaluate non-correlated subqueries. Bind parameters inside a subquery
 /// aren't supported (their numbering would collide with the outer query).
@@ -477,7 +550,11 @@ pub fn plan_subquery(q: &Query, catalog: &Catalog) -> Result<LogicalPlan> {
     Ok(plan)
 }
 
-fn plan_from(select: &Select, catalog: &Catalog) -> Result<(LogicalPlan, Scope)> {
+fn plan_from(
+    select: &Select,
+    catalog: &Catalog,
+    ctes: &CteMap,
+) -> Result<(LogicalPlan, Scope)> {
     if select.from.is_empty() {
         return Ok((LogicalPlan::Dual, Scope::default()));
     }
@@ -486,25 +563,40 @@ fn plan_from(select: &Select, catalog: &Catalog) -> Result<(LogicalPlan, Scope)>
     // cross-joined; explicit `JOIN`s within an entry fold in left-to-right.
     let mut acc: Option<(LogicalPlan, Scope)> = None;
     for twj in &select.from {
-        let (t, alias) = table_factor(&twj.relation)?;
-        let tbl = lookup(catalog, &t)?;
-        let scan = scan_for(tbl);
-        let sc = aliased_scope(tbl, alias.as_deref());
+        let (scan, sc) = resolve_relation(&twj.relation, catalog, ctes)?;
         acc = Some(match acc {
             None => (scan, sc),
             // A new FROM entry is an implicit cross join (no ON predicate).
             Some((ln, ls)) => join_step(ln, ls, scan, sc, None, &mut ctx)?,
         });
         for join in &twj.joins {
-            let (jt, jalias) = table_factor(&join.relation)?;
-            let jtbl = lookup(catalog, &jt)?;
-            let jscan = scan_for(jtbl);
-            let jsc = aliased_scope(jtbl, jalias.as_deref());
+            let (jscan, jsc) = resolve_relation(&join.relation, catalog, ctes)?;
             let (ln, ls) = acc.take().expect("seeded above");
             acc = Some(join_step(ln, ls, jscan, jsc, Some(&join.join_operator), &mut ctx)?);
         }
     }
     Ok(acc.expect("non-empty FROM"))
+}
+
+/// Resolve a `FROM`/`JOIN` relation to a plan node and its scope. A name that
+/// matches a CTE inlines the CTE's plan; otherwise it's a catalog table scan.
+fn resolve_relation(
+    tf: &TableFactor,
+    catalog: &Catalog,
+    ctes: &CteMap,
+) -> Result<(LogicalPlan, Scope)> {
+    let (name, alias) = table_factor(tf)?;
+    if let Some(cte) = ctes.get(&name.to_ascii_lowercase()) {
+        // Inline the CTE, qualifying its columns by the alias (or CTE name).
+        let qualifier = alias.unwrap_or(name);
+        let mut scope = cte.scope.clone();
+        for c in &mut scope.cols {
+            c.table = Some(qualifier.clone());
+        }
+        return Ok((cte.plan.clone(), scope));
+    }
+    let tbl = lookup(catalog, &name)?;
+    Ok((scan_for(tbl), aliased_scope(tbl, alias.as_deref())))
 }
 
 /// Fold one relation into the accumulated join tree. `op` is `None` for an
