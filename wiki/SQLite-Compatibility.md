@@ -101,6 +101,11 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
   {day,month,year}`, `weekday N`, `unixepoch`, `±HH:MM`, `subsec`), including the
   full `strftime` code set. `utc`/`localtime` are identity transforms (UTC only;
   no timezone database).
+- **PRAGMAs (row-returning):** `table_info(T)` (`cid, name, type, notnull,
+  dflt_value, pk`), `foreign_keys`, `user_version` (get/set; persisted in the
+  file header and read back by stock `sqlite3`), and `journal_mode`. Other
+  pragmas are accepted as no-ops. `journal_mode` reports `wal` (Squrust is
+  WAL-based) and a set echoes the requested mode.
 
 ### Limitations
 
@@ -115,8 +120,8 @@ These are **not** implemented yet (a non-exhaustive list):
 - **`ALTER TABLE`** other than `ADD COLUMN` (rename table/column, drop column),
   foreign keys, triggers, views, `AUTOINCREMENT` semantics (plain rowid
   allocation is used).
-- **User-defined functions / collations**, most `PRAGMA`s (parsed as no-ops),
-  JSON1, FTS, math extensions.
+- **User-defined functions / collations**, `PRAGMA`s beyond the four below
+  (others are accepted as no-ops), JSON1, FTS, math extensions.
 - **Float display** differs from SQLite (Rust's shortest round-trip vs SQLite's
   15-significant-digit formatting) — the **stored value is identical**, only the
   text rendering differs.

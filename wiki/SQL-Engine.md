@@ -99,6 +99,9 @@ and runs directly against a `WriteTx`.
 - Inner and left-outer **two-table** nested-loop joins.
 - `BEGIN` / `COMMIT` / `ROLLBACK` (real transactions through the [[Async API]]
   and [[C ABI and LD_PRELOAD]]).
+- Row-returning `PRAGMA`s: `table_info`, `foreign_keys`, `user_version`,
+  `journal_mode` (parsed by a dedicated `pragma` module, since the SQL grammar
+  rejects `table_info(t)`'s unquoted argument).
 
 See [[SQLite Compatibility]] for what's **not** yet supported (index usage,
 subqueries, 3+ table joins, window/user functions, …).

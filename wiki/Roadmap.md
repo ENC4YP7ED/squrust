@@ -41,7 +41,9 @@ discuss.
 - Flesh out the stubbed features: `blob_*` I/O, online `backup_*`,
   `serialize`/`deserialize`, extension loading, the `value_*`/`result_*` path
   for user functions.
-- Broaden `PRAGMA` handling beyond no-ops.
+- Broaden `PRAGMA` handling further (`index_list`, `foreign_key_list`,
+  `synchronous`, …); `table_info`, `foreign_keys`, `user_version`, and
+  `journal_mode` already return rows.
 
 ## Wasm / browser
 
