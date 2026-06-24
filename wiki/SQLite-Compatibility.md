@@ -77,7 +77,7 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
 - **DDL:** `CREATE TABLE`, `CREATE INDEX` (recorded, not yet used), `DROP TABLE`,
   `ALTER TABLE … ADD COLUMN` (rewrites `sqlite_master` in place; old rows are
   padded with the column's constant default on read, like SQLite).
-- **Constraints & defaults:** `UNIQUE` enforced on `INSERT`, column `DEFAULT`s
+- **Constraints & defaults:** `UNIQUE` enforced on `INSERT` and `UPDATE`, column `DEFAULT`s
   (incl. `CURRENT_TIMESTAMP`/`CURRENT_DATE`/`CURRENT_TIME`); a violation raises
   `SQLITE_CONSTRAINT` (→ Python `sqlite3.IntegrityError`).
 - **Joins:** inner, left-outer, cross, and comma joins over **any number of
@@ -122,8 +122,8 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
 These are **not** implemented yet (a non-exhaustive list):
 
 - **Index usage** — the planner always table-scans; `CREATE INDEX` is accepted
-  but inert. (`UNIQUE` *is* enforced, but by full scan on `INSERT`, not via an
-  index; non-rowid `PRIMARY KEY` isn't enforced yet.)
+  but inert. (`UNIQUE` *is* enforced on `INSERT`/`UPDATE`, but by full scan, not
+  via an index; non-rowid `PRIMARY KEY` isn't enforced yet.)
 - `RIGHT`/`FULL` outer joins, `USING`/`NATURAL` join syntax, hash joins.
 - **Correlated subqueries** (those referencing an outer column; non-correlated
   ones work — see Supported), **recursive** CTEs (`WITH RECURSIVE`; plain `WITH`
