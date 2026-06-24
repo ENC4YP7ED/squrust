@@ -289,11 +289,46 @@ fn truth(v: &Value) -> Option<bool> {
     }
 }
 
+/// A one-argument math function. NULL input or a non-finite (domain-error)
+/// result yields NULL, matching SQLite's math extension.
+fn math1(args: &[Value], f: fn(f64) -> f64) -> Value {
+    match args.first().and_then(Value::as_f64) {
+        Some(x) => {
+            let r = f(x);
+            if r.is_nan() {
+                Value::Null
+            } else {
+                Value::Real(r)
+            }
+        }
+        None => Value::Null,
+    }
+}
+
+fn math2(args: &[Value], f: fn(f64, f64) -> f64) -> Value {
+    match (
+        args.first().and_then(Value::as_f64),
+        args.get(1).and_then(Value::as_f64),
+    ) {
+        (Some(a), Some(b)) => {
+            let r = f(a, b);
+            if r.is_nan() {
+                Value::Null
+            } else {
+                Value::Real(r)
+            }
+        }
+        _ => Value::Null,
+    }
+}
+
 fn eval_function(name: &str, args: &[Value]) -> Result<Value> {
     let upper = name.to_ascii_uppercase();
     Ok(match upper.as_str() {
         "LENGTH" => match args.first() {
             Some(Value::Null) | None => Value::Null,
+            // A blob's length is its byte count; text/number is character count.
+            Some(Value::Blob(b)) => Value::Integer(b.len() as i64),
             Some(v) => Value::Integer(v.to_display_string().chars().count() as i64),
         },
         "UPPER" => match args.first() {
@@ -335,6 +370,54 @@ fn eval_function(name: &str, args: &[Value]) -> Result<Value> {
                 best
             }
         }
+        // Math functions (return REAL, like SQLite's math extension).
+        "SQRT" => math1(args, f64::sqrt),
+        "CEIL" | "CEILING" => math1(args, f64::ceil),
+        "FLOOR" => math1(args, f64::floor),
+        "TRUNC" => math1(args, f64::trunc),
+        "LN" => math1(args, f64::ln),
+        "LOG10" => math1(args, f64::log10),
+        "LOG2" => math1(args, f64::log2),
+        "EXP" => math1(args, f64::exp),
+        "SIN" => math1(args, f64::sin),
+        "COS" => math1(args, f64::cos),
+        "TAN" => math1(args, f64::tan),
+        "ASIN" => math1(args, f64::asin),
+        "ACOS" => math1(args, f64::acos),
+        "ATAN" => math1(args, f64::atan),
+        "RADIANS" => math1(args, f64::to_radians),
+        "DEGREES" => math1(args, f64::to_degrees),
+        "PI" => Value::Real(std::f64::consts::PI),
+        "POW" | "POWER" => math2(args, f64::powf),
+        "ATAN2" => math2(args, f64::atan2),
+        "MOD" => match (args.first().and_then(Value::as_f64), args.get(1).and_then(Value::as_f64)) {
+            (Some(x), Some(y)) if y != 0.0 => Value::Real(x % y),
+            _ => Value::Null,
+        },
+        "LOG" => match args.len() {
+            1 => math1(args, f64::log10),
+            _ => match (args.first().and_then(Value::as_f64), args.get(1).and_then(Value::as_f64)) {
+                (Some(b), Some(x)) => Value::Real(x.log(b)),
+                _ => Value::Null,
+            },
+        },
+        // Misc builtins.
+        "PRINTF" | "FORMAT" => super::builtins::printf(args),
+        "GLOB" => match (args.first(), args.get(1)) {
+            (Some(p), Some(s)) if !p.is_null() && !s.is_null() => {
+                Value::Boolean(super::builtins::glob_match(&p.to_display_string(), &s.to_display_string()))
+            }
+            _ => Value::Null,
+        },
+        "RANDOM" => Value::Integer(super::builtins::random()),
+        "RANDOMBLOB" => match args.first().and_then(Value::as_i64) {
+            Some(n) => super::builtins::randomblob(n),
+            None => Value::Null,
+        },
+        "ZEROBLOB" => match args.first().and_then(Value::as_i64) {
+            Some(n) => super::builtins::zeroblob(n),
+            None => Value::Null,
+        },
         // Date/time functions (SQLite-compatible; see `datetime` module).
         "DATE" => super::datetime::date(args),
         "TIME" => super::datetime::time(args),

@@ -228,6 +228,15 @@ pub fn resolve_expr(expr: &SqlExpr, scope: &Scope, ctx: &mut ResolveCtx) -> Resu
                 .collect::<Result<_>>()?,
             negated: *negated,
         }),
+        // `ceil`/`floor` parse to dedicated AST nodes; treat as scalar functions.
+        SqlExpr::Ceil { expr, .. } => Ok(Expr::Function {
+            name: "CEIL".into(),
+            args: vec![resolve_expr(expr, scope, ctx)?],
+        }),
+        SqlExpr::Floor { expr, .. } => Ok(Expr::Function {
+            name: "FLOOR".into(),
+            args: vec![resolve_expr(expr, scope, ctx)?],
+        }),
         // Subqueries: stash the raw AST; the engine plans and evaluates it to a
         // constant (non-correlated) before execution.
         SqlExpr::Subquery(q) => Ok(Expr::ScalarSubquery(q.clone())),

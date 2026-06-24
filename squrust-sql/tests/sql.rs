@@ -655,3 +655,32 @@ async fn update_unique_enforcement() {
     let r = rows(&eng, "SELECT id, e FROM t ORDER BY id", &[]).await;
     assert_eq!(r[0], vec![Value::Integer(1), Value::Text("c".into())]);
 }
+
+#[tokio::test]
+async fn misc_builtins() {
+    let eng = engine().await;
+    let one = |r: Vec<Vec<Value>>| r.into_iter().next().unwrap().into_iter().next().unwrap();
+
+    // printf / format.
+    assert_eq!(one(rows(&eng, "SELECT printf('%d-%s-%05.2f', 42, 'hi', 3.14159)", &[]).await),
+        Value::Text("42-hi-03.14".into()));
+    assert_eq!(one(rows(&eng, "SELECT format('%x', 255)", &[]).await), Value::Text("ff".into()));
+
+    // glob (function form) incl. classes.
+    assert_eq!(one(rows(&eng, "SELECT glob('a*c','abc')", &[]).await), Value::Boolean(true));
+    assert_eq!(one(rows(&eng, "SELECT glob('[a-c]x','bx')", &[]).await), Value::Boolean(true));
+    assert_eq!(one(rows(&eng, "SELECT glob('[^a-c]x','bx')", &[]).await), Value::Boolean(false));
+
+    // math.
+    assert_eq!(one(rows(&eng, "SELECT pow(2,10)", &[]).await), Value::Real(1024.0));
+    assert_eq!(one(rows(&eng, "SELECT ceil(2.1)", &[]).await), Value::Real(3.0));
+    assert_eq!(one(rows(&eng, "SELECT floor(-2.1)", &[]).await), Value::Real(-3.0));
+    assert_eq!(one(rows(&eng, "SELECT log2(8)", &[]).await), Value::Real(3.0));
+    assert_eq!(one(rows(&eng, "SELECT mod(7,3)", &[]).await), Value::Real(1.0));
+    assert_eq!(one(rows(&eng, "SELECT sqrt(-1)", &[]).await), Value::Null); // domain error -> NULL
+
+    // random / blobs.
+    assert_eq!(one(rows(&eng, "SELECT typeof(random())", &[]).await), Value::Text("integer".into()));
+    assert_eq!(one(rows(&eng, "SELECT length(randomblob(8))", &[]).await), Value::Integer(8));
+    assert_eq!(one(rows(&eng, "SELECT length(zeroblob(5))", &[]).await), Value::Integer(5));
+}
