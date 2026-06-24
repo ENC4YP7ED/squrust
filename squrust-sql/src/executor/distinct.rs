@@ -45,7 +45,8 @@ impl Executor for DistinctExec {
     }
 }
 
-fn rows_eq(a: &[Value], b: &[Value]) -> bool {
+/// Two value-lists are equal under SQLite set semantics (NULLs equal).
+pub(crate) fn rows_eq(a: &[Value], b: &[Value]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| match (x.is_null(), y.is_null()) {
             (true, true) => true,

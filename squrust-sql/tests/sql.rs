@@ -606,3 +606,30 @@ async fn ctes() {
     // Recursive CTEs are rejected.
     assert!(eng.query("WITH RECURSIVE r AS (SELECT 1 AS x) SELECT x FROM r", &[]).await.is_err());
 }
+
+#[tokio::test]
+async fn set_operations() {
+    let eng = engine().await;
+    eng.execute_ddl("CREATE TABLE a(x INTEGER)").await.unwrap();
+    eng.execute_ddl("CREATE TABLE b(x INTEGER)").await.unwrap();
+    eng.execute("INSERT INTO a VALUES (1),(2),(3),(3)", &[]).await.unwrap();
+    eng.execute("INSERT INTO b VALUES (2),(3),(4)", &[]).await.unwrap();
+    let col = |r: Vec<Vec<Value>>| r.into_iter().map(|mut row| row.swap_remove(0)).collect::<Vec<_>>();
+
+    // UNION dedups and sorts (matching SQLite's sorter-based dedup).
+    assert_eq!(col(rows(&eng, "SELECT x FROM a UNION SELECT x FROM b", &[]).await),
+        vec![Value::Integer(1), Value::Integer(2), Value::Integer(3), Value::Integer(4)]);
+    // UNION ALL keeps duplicates and order.
+    assert_eq!(col(rows(&eng, "SELECT x FROM a UNION ALL SELECT x FROM b", &[]).await),
+        vec![1,2,3,3,2,3,4].into_iter().map(Value::Integer).collect::<Vec<_>>());
+    // INTERSECT / EXCEPT.
+    assert_eq!(col(rows(&eng, "SELECT x FROM a INTERSECT SELECT x FROM b", &[]).await),
+        vec![Value::Integer(2), Value::Integer(3)]);
+    assert_eq!(col(rows(&eng, "SELECT x FROM a EXCEPT SELECT x FROM b", &[]).await),
+        vec![Value::Integer(1)]);
+    // ORDER BY applies to the whole compound.
+    assert_eq!(col(rows(&eng, "SELECT x FROM a UNION SELECT x FROM b ORDER BY x DESC", &[]).await),
+        vec![4,3,2,1].into_iter().map(Value::Integer).collect::<Vec<_>>());
+
+    assert!(eng.query("SELECT x FROM a UNION SELECT x, x FROM b", &[]).await.is_err());
+}

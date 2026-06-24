@@ -297,6 +297,10 @@ impl SqlEngine {
             LogicalPlan::Limit { input, .. } | LogicalPlan::Distinct { input } => {
                 self.rewrite_plan_subqueries(input, source, params)?;
             }
+            LogicalPlan::SetOp { left, right, .. } => {
+                self.rewrite_plan_subqueries(left, source, params)?;
+                self.rewrite_plan_subqueries(right, source, params)?;
+            }
         }
         Ok(())
     }

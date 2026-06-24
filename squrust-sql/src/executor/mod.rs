@@ -11,6 +11,7 @@ pub mod join;
 pub mod limit;
 pub mod projection;
 pub mod scan;
+pub mod setop;
 pub mod sort;
 
 use std::sync::Arc;
@@ -167,6 +168,17 @@ pub fn build(plan: LogicalPlan, tx: ReadSource, params: Params) -> Box<dyn Execu
         LogicalPlan::Distinct { input } => {
             let inner = build(*input, tx, params);
             Box::new(distinct::DistinctExec::new(inner))
+        }
+        LogicalPlan::SetOp {
+            kind,
+            all,
+            left,
+            right,
+            columns,
+        } => {
+            let l = build(*left, tx.clone(), params.clone());
+            let r = build(*right, tx, params);
+            Box::new(setop::SetOpExec::new(l, r, kind, all, columns))
         }
     }
 }

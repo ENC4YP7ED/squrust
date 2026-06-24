@@ -119,6 +119,22 @@ pub enum LogicalPlan {
     Distinct {
         input: Box<LogicalPlan>,
     },
+    /// A compound `UNION`/`INTERSECT`/`EXCEPT` of two sub-plans.
+    SetOp {
+        kind: SetOpKind,
+        /// `UNION ALL` keeps duplicates; otherwise the result is distinct.
+        all: bool,
+        left: Box<LogicalPlan>,
+        right: Box<LogicalPlan>,
+        columns: Vec<ColumnInfo>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetOpKind {
+    Union,
+    Intersect,
+    Except,
 }
 
 impl LogicalPlan {
@@ -128,6 +144,7 @@ impl LogicalPlan {
             LogicalPlan::Scan { columns, .. }
             | LogicalPlan::Project { columns, .. }
             | LogicalPlan::NestedLoopJoin { columns, .. }
+            | LogicalPlan::SetOp { columns, .. }
             | LogicalPlan::Aggregate { columns, .. } => columns.clone(),
             LogicalPlan::Filter { input, .. }
             | LogicalPlan::Sort { input, .. }
@@ -415,6 +432,11 @@ fn plan_query_with(
 
     let select = match q.body.as_ref() {
         SetExpr::Select(s) => s.as_ref(),
+        SetExpr::SetOperation { .. } => {
+            // Compound query: build the set-op tree, then ORDER BY / LIMIT.
+            let node = plan_set_expr(&q.body, catalog, ctx, &ctes)?;
+            return apply_order_limit(node, q, ctx, OrderScope::Output);
+        }
         other => return Err(SqlError::Unsupported(format!("query body: {other}"))),
     };
 
@@ -482,6 +504,105 @@ fn plan_query_with(
     }
 
     Ok(node)
+}
+
+/// Plan a `SELECT` body without `ORDER BY`/`LIMIT` — used as a set-operation
+/// operand (compound operands carry no `ORDER BY`/`LIMIT` of their own).
+fn plan_select_core(
+    select: &Select,
+    catalog: &Catalog,
+    ctx: &mut ResolveCtx,
+    ctes: &CteMap,
+) -> Result<LogicalPlan> {
+    let (mut node, scope) = plan_from(select, catalog, ctes)?;
+
+    if let Some(pred) = &select.selection {
+        let predicate = resolve_expr(pred, &scope, ctx)?;
+        node = LogicalPlan::Filter {
+            input: Box::new(node),
+            predicate,
+        };
+    }
+
+    let group_exprs: &[SqlExpr] = match &select.group_by {
+        sqlparser::ast::GroupByExpr::Expressions(exprs, _) => exprs,
+        _ => &[],
+    };
+    let has_agg = !group_exprs.is_empty()
+        || select.projection.iter().any(|item| match item {
+            SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => {
+                contains_aggregate(e)
+            }
+            _ => false,
+        });
+
+    if has_agg {
+        node = plan_aggregate(node, select, group_exprs, &scope, ctx)?;
+    } else {
+        let projected = collect_projection(select, &scope, ctx)?;
+        let (exprs, columns): (Vec<Expr>, Vec<ColumnInfo>) = projected.into_iter().unzip();
+        node = LogicalPlan::Project {
+            input: Box::new(node),
+            exprs,
+            columns,
+        };
+    }
+
+    let distinct = match &select.distinct {
+        None => false,
+        Some(sqlparser::ast::Distinct::Distinct) => true,
+        Some(other) => return Err(SqlError::Unsupported(format!("{other}"))),
+    };
+    if distinct {
+        node = LogicalPlan::Distinct {
+            input: Box::new(node),
+        };
+    }
+    Ok(node)
+}
+
+/// Plan a set-expression operand: a `SELECT`, a nested set operation, or a
+/// parenthesized query.
+fn plan_set_expr(
+    se: &SetExpr,
+    catalog: &Catalog,
+    ctx: &mut ResolveCtx,
+    ctes: &CteMap,
+) -> Result<LogicalPlan> {
+    use sqlparser::ast::{SetOperator, SetQuantifier};
+    match se {
+        SetExpr::Select(s) => plan_select_core(s, catalog, ctx, ctes),
+        SetExpr::Query(q) => plan_query_with(q, catalog, ctx, ctes),
+        SetExpr::SetOperation {
+            op,
+            set_quantifier,
+            left,
+            right,
+        } => {
+            let l = plan_set_expr(left, catalog, ctx, ctes)?;
+            let r = plan_set_expr(right, catalog, ctx, ctes)?;
+            if l.columns().len() != r.columns().len() {
+                return Err(SqlError::Schema(
+                    "SELECTs to the left and right of a set operator do not have the same number of result columns".into(),
+                ));
+            }
+            let kind = match op {
+                SetOperator::Union => SetOpKind::Union,
+                SetOperator::Intersect => SetOpKind::Intersect,
+                SetOperator::Except => SetOpKind::Except,
+            };
+            let all = matches!(set_quantifier, SetQuantifier::All | SetQuantifier::AllByName);
+            let columns = l.columns();
+            Ok(LogicalPlan::SetOp {
+                kind,
+                all,
+                left: Box::new(l),
+                right: Box::new(r),
+                columns,
+            })
+        }
+        other => Err(SqlError::Unsupported(format!("set expression: {other}"))),
+    }
 }
 
 /// Build the CTE map for a query from its `WITH` clause (plus inherited CTEs).
