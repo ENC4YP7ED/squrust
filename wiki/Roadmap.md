@@ -15,7 +15,8 @@ discuss.
   index b-trees instead of a full scan.
 - **Joins** — `RIGHT`/`FULL` outer, `USING`/`NATURAL`, hash joins (inner,
   left-outer, cross, comma, and 3+ tables already work via nested loop).
-- **Subqueries / CTEs / set operations**.
+- **Correlated subqueries** (non-correlated scalar / `IN` / `EXISTS` already
+  work), **CTEs**, **set operations**.
 - **`ALTER TABLE`** beyond `ADD COLUMN` (rename table/column, drop column),
   foreign keys, triggers, views.
 

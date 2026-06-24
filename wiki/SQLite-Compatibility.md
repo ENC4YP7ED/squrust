@@ -82,6 +82,9 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
   `SQLITE_CONSTRAINT` (→ Python `sqlite3.IntegrityError`).
 - **Joins:** inner, left-outer, cross, and comma joins over **any number of
   tables**, via a left-deep nested-loop tree.
+- **Subqueries (non-correlated):** scalar `(SELECT …)`, `IN (SELECT …)` /
+  `NOT IN`, and `[NOT] EXISTS` — in `SELECT`, `WHERE`, and `INSERT`/`UPDATE`/
+  `DELETE`. Each is planned and evaluated once, then folded to a constant.
 - **Transactions:** `BEGIN`/`COMMIT`/`ROLLBACK` (through the async and C APIs).
 - **Type affinity:** SQLite's rules — BLOB/NONE does no conversion, INTEGER
   keeps fractional reals as real, TEXT stringifies numbers.
@@ -116,7 +119,9 @@ These are **not** implemented yet (a non-exhaustive list):
   but inert. (`UNIQUE` *is* enforced, but by full scan on `INSERT`, not via an
   index; non-rowid `PRIMARY KEY` isn't enforced yet.)
 - `RIGHT`/`FULL` outer joins, `USING`/`NATURAL` join syntax, hash joins.
-- **Subqueries**, CTEs (`WITH`), set operations (`UNION`/`INTERSECT`/`EXCEPT`).
+- **Correlated subqueries** (those referencing an outer column; non-correlated
+  ones work — see Supported), CTEs (`WITH`), set operations
+  (`UNION`/`INTERSECT`/`EXCEPT`).
 - **Window functions.**
 - **`ALTER TABLE`** other than `ADD COLUMN` (rename table/column, drop column),
   foreign keys, triggers, views, `AUTOINCREMENT` semantics (plain rowid

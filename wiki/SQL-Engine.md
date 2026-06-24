@@ -105,4 +105,4 @@ and runs directly against a `WriteTx`.
   rejects `table_info(t)`'s unquoted argument).
 
 See [[SQLite Compatibility]] for what's **not** yet supported (index usage,
-subqueries, RIGHT/FULL joins, window/user functions, …).
+correlated subqueries, RIGHT/FULL joins, window/user functions, …).
