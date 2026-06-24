@@ -16,7 +16,8 @@ discuss.
 - **Joins** — `RIGHT`/`FULL` outer, `USING`/`NATURAL`, hash joins (inner,
   left-outer, cross, comma, and 3+ tables already work via nested loop).
 - **Correlated subqueries** (non-correlated scalar / `IN` / `EXISTS` already
-  work), **CTEs**, **set operations**.
+  work), **recursive CTEs** (`WITH RECURSIVE`; non-recursive `WITH` works),
+  **set operations**.
 - **`ALTER TABLE`** beyond `ADD COLUMN` (rename table/column, drop column),
   foreign keys, triggers, views.
 

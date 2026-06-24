@@ -85,6 +85,9 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
 - **Subqueries (non-correlated):** scalar `(SELECT …)`, `IN (SELECT …)` /
   `NOT IN`, and `[NOT] EXISTS` — in `SELECT`, `WHERE`, and `INSERT`/`UPDATE`/
   `DELETE`. Each is planned and evaluated once, then folded to a constant.
+- **CTEs (`WITH`):** non-recursive — multiple CTEs, explicit column lists
+  (`WITH c(a,b) AS …`), aggregating CTEs, and CTEs used in joins. Each is
+  inlined where its name appears in `FROM`.
 - **Transactions:** `BEGIN`/`COMMIT`/`ROLLBACK` (through the async and C APIs).
 - **Type affinity:** SQLite's rules — BLOB/NONE does no conversion, INTEGER
   keeps fractional reals as real, TEXT stringifies numbers.
@@ -120,8 +123,8 @@ These are **not** implemented yet (a non-exhaustive list):
   index; non-rowid `PRIMARY KEY` isn't enforced yet.)
 - `RIGHT`/`FULL` outer joins, `USING`/`NATURAL` join syntax, hash joins.
 - **Correlated subqueries** (those referencing an outer column; non-correlated
-  ones work — see Supported), CTEs (`WITH`), set operations
-  (`UNION`/`INTERSECT`/`EXCEPT`).
+  ones work — see Supported), **recursive** CTEs (`WITH RECURSIVE`; plain `WITH`
+  works), set operations (`UNION`/`INTERSECT`/`EXCEPT`).
 - **Window functions.**
 - **`ALTER TABLE`** other than `ADD COLUMN` (rename table/column, drop column),
   foreign keys, triggers, views, `AUTOINCREMENT` semantics (plain rowid
