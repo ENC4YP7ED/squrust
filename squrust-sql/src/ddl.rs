@@ -7,7 +7,7 @@ use sqlparser::ast::{
 
 use crate::error::{Result, SqlError};
 use crate::parser;
-use crate::schema::{Column, Index, Table};
+use crate::schema::{Column, DefaultExpr, Index, Table};
 use crate::types::{SqlType, Value};
 
 /// Parse a `CREATE TABLE` statement (by text) into a [`Table`] template. The
@@ -30,9 +30,11 @@ pub fn table_from_ast(ct: &CreateTable, sql: &str) -> Result<Table> {
     let mut rowid_alias = None;
 
     for (idx, col) in ct.columns.iter().enumerate() {
-        let sql_type = SqlType::affinity_from_decl(&col.data_type.to_string());
+        let decl_type = col.data_type.to_string();
+        let sql_type = SqlType::affinity_from_decl(&decl_type);
         let mut not_null = false;
         let mut primary_key = false;
+        let mut unique = false;
         let mut default = None;
 
         for opt in &col.options {
@@ -42,8 +44,9 @@ pub fn table_from_ast(ct: &CreateTable, sql: &str) -> Result<Table> {
                     primary_key = true;
                     not_null = true;
                 }
+                ColumnOption::Unique { .. } => unique = true,
                 ColumnOption::Default(expr) => {
-                    default = Some(literal_from_expr(expr)?);
+                    default = Some(default_from_expr(expr));
                 }
                 _ => {}
             }
@@ -55,9 +58,11 @@ pub fn table_from_ast(ct: &CreateTable, sql: &str) -> Result<Table> {
 
         columns.push(Column {
             name: col.name.value.clone(),
+            decl_type,
             sql_type,
             not_null,
             primary_key,
+            unique,
             default,
         });
     }
@@ -113,7 +118,32 @@ pub fn object_name_to_string(name: &sqlparser::ast::ObjectName) -> String {
         .join(".")
 }
 
-/// Best-effort evaluation of a literal expression (for column defaults).
+/// Parse a column `DEFAULT` expression. Recognises literal constants and the
+/// dynamic keyword defaults `CURRENT_TIMESTAMP` / `CURRENT_DATE` / `CURRENT_TIME`
+/// (evaluated per-insert). Anything else falls back to NULL rather than failing
+/// the `CREATE TABLE`, to stay drop-in friendly.
+pub fn default_from_expr(expr: &SqlExpr) -> DefaultExpr {
+    // Dynamic keyword defaults may parse as an identifier or a function.
+    let keyword = match expr {
+        SqlExpr::Identifier(id) => Some(id.value.to_ascii_uppercase()),
+        SqlExpr::Function(f) => Some(object_name_to_string(&f.name).to_ascii_uppercase()),
+        _ => None,
+    };
+    if let Some(k) = keyword {
+        match k.as_str() {
+            "CURRENT_TIMESTAMP" => return DefaultExpr::CurrentTimestamp,
+            "CURRENT_DATE" => return DefaultExpr::CurrentDate,
+            "CURRENT_TIME" => return DefaultExpr::CurrentTime,
+            _ => {}
+        }
+    }
+    match literal_from_expr(expr) {
+        Ok(v) => DefaultExpr::Value(v),
+        Err(_) => DefaultExpr::Value(Value::Null),
+    }
+}
+
+/// Best-effort evaluation of a literal expression.
 pub fn literal_from_expr(expr: &SqlExpr) -> Result<Value> {
     match expr {
         SqlExpr::Value(v) => value_from_sql(v),

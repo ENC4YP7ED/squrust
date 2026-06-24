@@ -341,3 +341,75 @@ async fn case_and_integer_division_and_blob_literals() {
     assert_eq!(r[0][0], Value::Blob(b"Hello".to_vec()));
     assert_eq!(r[0][1], Value::Text("blob".into()));
 }
+
+#[tokio::test]
+async fn select_distinct() {
+    let eng = engine().await;
+    eng.execute_ddl("CREATE TABLE t(x INTEGER, y TEXT)").await.unwrap();
+    eng.execute("INSERT INTO t VALUES (1,'a'),(1,'a'),(2,'b'),(1,'a'),(2,'c')", &[])
+        .await
+        .unwrap();
+    let r = rows(&eng, "SELECT DISTINCT x, y FROM t ORDER BY x, y", &[]).await;
+    assert_eq!(r.len(), 3);
+    assert_eq!(r[0], vec![Value::Integer(1), Value::Text("a".into())]);
+    assert_eq!(r[1], vec![Value::Integer(2), Value::Text("b".into())]);
+    assert_eq!(r[2], vec![Value::Integer(2), Value::Text("c".into())]);
+
+    let r = rows(&eng, "SELECT DISTINCT x FROM t ORDER BY x", &[]).await;
+    assert_eq!(ints(&r, 0), vec![1, 2]);
+}
+
+#[tokio::test]
+async fn having_clause() {
+    let eng = engine().await;
+    eng.execute_ddl("CREATE TABLE sales(region TEXT, amount INTEGER)")
+        .await
+        .unwrap();
+    eng.execute(
+        "INSERT INTO sales VALUES('west',10),('west',20),('east',5),('north',50),('north',1)",
+        &[],
+    )
+    .await
+    .unwrap();
+
+    // HAVING referencing an aggregate.
+    let r = rows(
+        &eng,
+        "SELECT region FROM sales GROUP BY region HAVING SUM(amount) > 15 ORDER BY region",
+        &[],
+    )
+    .await;
+    assert_eq!(
+        r.iter().map(|x| x[0].to_display_string()).collect::<Vec<_>>(),
+        vec!["north", "west"]
+    );
+
+    // HAVING referencing a SELECT alias + a second aggregate.
+    let r = rows(
+        &eng,
+        "SELECT region, COUNT(*) c FROM sales GROUP BY region \
+         HAVING c >= 2 AND SUM(amount) < 40 ORDER BY region",
+        &[],
+    )
+    .await;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0][0], Value::Text("west".into()));
+    assert_eq!(r[0][1], Value::Integer(2));
+}
+
+#[tokio::test]
+async fn scalar_and_aggregate_minmax() {
+    let eng = engine().await;
+    // Scalar (≥2 args): per-row, NULL if any arg NULL.
+    let r = rows(&eng, "SELECT max(3,7,5), min(3,7,5), max(1,NULL,9)", &[]).await;
+    assert_eq!(r[0][0], Value::Integer(7));
+    assert_eq!(r[0][1], Value::Integer(3));
+    assert!(r[0][2].is_null());
+
+    // Aggregate (1 arg) still works.
+    eng.execute_ddl("CREATE TABLE t(x INTEGER)").await.unwrap();
+    eng.execute("INSERT INTO t VALUES (5),(2),(9)", &[]).await.unwrap();
+    let r = rows(&eng, "SELECT min(x), max(x) FROM t", &[]).await;
+    assert_eq!(r[0][0], Value::Integer(2));
+    assert_eq!(r[0][1], Value::Integer(9));
+}

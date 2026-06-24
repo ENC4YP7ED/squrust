@@ -309,6 +309,27 @@ fn eval_function(name: &str, args: &[Value]) -> Result<Value> {
             }
             None => Value::Null,
         },
+        // Scalar (multi-arg) min/max: NULL if any argument is NULL, else the
+        // extreme by SQLite value ordering. (Single-arg min/max are aggregates.)
+        "MIN" | "MAX" if !args.is_empty() => {
+            if args.iter().any(|v| v.is_null()) {
+                Value::Null
+            } else {
+                let want_min = upper == "MIN";
+                let mut best = args[0].clone();
+                for v in &args[1..] {
+                    let take = match v.compare(&best) {
+                        Some(Ordering::Less) => want_min,
+                        Some(Ordering::Greater) => !want_min,
+                        _ => false,
+                    };
+                    if take {
+                        best = v.clone();
+                    }
+                }
+                best
+            }
+        }
         "COALESCE" => args
             .iter()
             .find(|v| !v.is_null())

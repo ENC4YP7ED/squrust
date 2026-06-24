@@ -2,6 +2,7 @@
 //! via [`Executor::next`]. Read access comes from a shared `ReadTx`.
 
 pub mod aggregate;
+pub mod distinct;
 pub mod dml;
 pub mod eval;
 pub mod filter;
@@ -113,10 +114,12 @@ pub fn build(plan: LogicalPlan, tx: ReadSource, params: Params) -> Box<dyn Execu
             aggs,
             output,
             columns,
+            base_len,
+            having,
         } => {
             let inner = build(*input, tx, params.clone());
             Box::new(aggregate::AggExec::new(
-                inner, group_by, aggs, output, columns, params,
+                inner, group_by, aggs, output, columns, base_len, having, params,
             ))
         }
         LogicalPlan::Sort { input, keys } => {
@@ -130,6 +133,10 @@ pub fn build(plan: LogicalPlan, tx: ReadSource, params: Params) -> Box<dyn Execu
         } => {
             let inner = build(*input, tx, params);
             Box::new(limit::LimitExec::new(inner, limit, offset))
+        }
+        LogicalPlan::Distinct { input } => {
+            let inner = build(*input, tx, params);
+            Box::new(distinct::DistinctExec::new(inner))
         }
     }
 }

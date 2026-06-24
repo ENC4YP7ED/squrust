@@ -9,7 +9,7 @@ use squrust_core::StorageEngine;
 use squrust_sql::SqlEngine;
 
 use crate::constants::*;
-use crate::state::{ConnectionState, block_on, c_to_string};
+use crate::state::{ConnectionState, block_on, c_to_string, conn};
 use crate::types::sqlite3;
 
 async fn build_engine(path: Option<&str>) -> Result<Arc<SqlEngine>, String> {
@@ -74,6 +74,11 @@ pub unsafe extern "C" fn sqlite3_open_v2(
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_close(db: *mut sqlite3) -> c_int {
     if !db.is_null() {
+        // Fold the WAL into the main file so a closed file database is a
+        // complete, stock-sqlite3-readable .db (cross-process durability).
+        if let Some(c) = conn(db) {
+            let _ = c.engine.storage().checkpoint();
+        }
         drop(Box::from_raw(db as *mut ConnectionState));
     }
     SQLITE_OK

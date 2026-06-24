@@ -5,7 +5,7 @@ use std::os::raw::c_char;
 use std::sync::Arc;
 
 use squrust_core::WriteTx;
-use squrust_sql::{ReadSource, SqlEngine, SqlError, Value};
+use squrust_sql::{ColumnInfo, ReadSource, SqlEngine, SqlError, Value};
 
 use crate::constants::*;
 use crate::types::{sqlite3, sqlite3_stmt};
@@ -42,6 +42,8 @@ pub struct StmtState {
     pub executed: bool,
     pub is_query: bool,
     pub columns: Vec<CString>,
+    /// Declared column types (for `sqlite3_column_decltype`), parallel to `columns`.
+    pub decltypes: Vec<Option<CString>>,
     pub rows: Vec<Vec<Value>>,
     pub cursor: usize,
     pub current: Option<usize>,
@@ -66,6 +68,7 @@ impl StmtState {
             executed: false,
             is_query: false,
             columns: Vec::new(),
+            decltypes: Vec::new(),
             rows: Vec::new(),
             cursor: 0,
             current: None,
@@ -131,8 +134,7 @@ impl StmtState {
                     None => Arc::new(self.engine.storage().begin_read()),
                 };
                 let mut exec = self.engine.build_query(source, &self.sql, &self.params)?;
-                let cols: Vec<String> =
-                    exec.columns().iter().map(|c| c.name.clone()).collect();
+                self.set_columns(exec.columns());
                 let rows = block_on(async move {
                     let mut rows = Vec::new();
                     while let Some(r) = exec.next().await? {
@@ -140,10 +142,6 @@ impl StmtState {
                     }
                     Ok::<_, SqlError>(rows)
                 })?;
-                self.columns = cols
-                    .iter()
-                    .map(|c| CString::new(c.as_str()).unwrap_or_default())
-                    .collect();
                 self.rows = rows;
             }
             _ => {
@@ -167,8 +165,15 @@ impl StmtState {
         if !self.executed {
             self.executed = true;
             if let Err(e) = self.run() {
-                self.set_db_error(SQLITE_ERROR, e.to_string());
-                return SQLITE_ERROR;
+                // Map constraint violations to SQLITE_CONSTRAINT so callers
+                // (e.g. CPython) raise IntegrityError rather than a generic error.
+                let code = if matches!(e, SqlError::Constraint(_)) {
+                    SQLITE_CONSTRAINT
+                } else {
+                    SQLITE_ERROR
+                };
+                self.set_db_error(code, e.to_string());
+                return code;
             }
         }
         let rc = if self.is_query && self.cursor < self.rows.len() {
@@ -203,11 +208,38 @@ impl StmtState {
         self.is_query = false;
         self.rows.clear();
         self.columns.clear();
+        self.decltypes.clear();
         self.cursor = 0;
         self.current = None;
         self.busy = false;
         self.text_cache.clear();
         self.blob_cache.clear();
+    }
+
+    /// Cache column names and declared types from a plan's column metadata.
+    fn set_columns(&mut self, cols: &[ColumnInfo]) {
+        self.columns = cols
+            .iter()
+            .map(|c| CString::new(c.name.as_str()).unwrap_or_default())
+            .collect();
+        self.decltypes = cols
+            .iter()
+            .map(|c| {
+                c.decl_type
+                    .as_deref()
+                    .and_then(|d| CString::new(d).ok())
+            })
+            .collect();
+    }
+
+    pub fn decltype_ptr(&self, col: i32) -> *const std::os::raw::c_char {
+        if col < 0 {
+            return std::ptr::null();
+        }
+        match self.decltypes.get(col as usize) {
+            Some(Some(cs)) => cs.as_ptr(),
+            _ => std::ptr::null(),
+        }
     }
 
     pub fn clear_bindings(&mut self) {
@@ -228,10 +260,7 @@ impl StmtState {
     pub fn ensure_columns(&mut self) {
         if self.columns.is_empty() && !self.executed {
             if let Ok(cols) = self.engine.describe(&self.sql) {
-                self.columns = cols
-                    .iter()
-                    .map(|c| CString::new(c.name.as_str()).unwrap_or_default())
-                    .collect();
+                self.set_columns(&cols);
             }
         }
     }

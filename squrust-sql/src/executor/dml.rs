@@ -3,11 +3,13 @@
 
 use squrust_core::{BTree, WriteTx};
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::error::{Result, SqlError};
 use crate::executor::eval::eval;
 use crate::planner::{DeletePlan, InsertPlan, UpdatePlan};
 use crate::row::Row;
-use crate::schema::Table;
+use crate::schema::{Column, DefaultExpr, Table};
 use crate::types::Value;
 
 /// Result of an INSERT: rows affected and the last row id assigned.
@@ -35,12 +37,8 @@ pub fn insert(
             )));
         }
 
-        // Start from defaults.
-        let mut values: Vec<Value> = table
-            .columns
-            .iter()
-            .map(|c| c.default.clone().unwrap_or(Value::Null))
-            .collect();
+        // Start from defaults (dynamic keyword defaults evaluated now).
+        let mut values: Vec<Value> = table.columns.iter().map(eval_default).collect();
 
         for (slot, expr) in plan.target_cols.iter().zip(row_exprs) {
             let v = eval(expr, &[], 0, params)?;
@@ -68,6 +66,19 @@ pub fn insert(
             }
         }
 
+        // UNIQUE column constraints (non-rowid). Table-scanned in the absence of
+        // index b-trees.
+        if let Some((ci, conflict_rowid)) = find_unique_conflict(tx, &tree, table, &values, None)? {
+            if plan.or_replace {
+                tree.delete(tx, conflict_rowid)?;
+            } else {
+                return Err(SqlError::Constraint(format!(
+                    "UNIQUE constraint failed: {}.{}",
+                    table.name, table.columns[ci].name
+                )));
+            }
+        }
+
         // Primary-key uniqueness for the rowid alias.
         let exists = tree.get(tx, rowid)?.is_some();
         if exists {
@@ -75,8 +86,9 @@ pub fn insert(
                 tree.delete(tx, rowid)?;
             } else if table.rowid_alias.is_some() {
                 return Err(SqlError::Constraint(format!(
-                    "UNIQUE constraint failed: {}.rowid",
-                    table.name
+                    "UNIQUE constraint failed: {}.{}",
+                    table.name,
+                    table.rowid_alias.map(|i| table.columns[i].name.as_str()).unwrap_or("rowid")
                 )));
             }
         }
@@ -140,6 +152,79 @@ pub fn delete(tx: &WriteTx, table: &Table, plan: &DeletePlan, params: &[Value]) 
         }
     }
     Ok(count)
+}
+
+/// Evaluate a column's `DEFAULT` for a fresh row.
+fn eval_default(col: &Column) -> Value {
+    match &col.default {
+        None => Value::Null,
+        Some(DefaultExpr::Value(v)) => v.clone(),
+        Some(DefaultExpr::CurrentTimestamp) => Value::Text(now_utc("%Y-%m-%d %H:%M:%S")),
+        Some(DefaultExpr::CurrentDate) => Value::Text(now_utc("%Y-%m-%d")),
+        Some(DefaultExpr::CurrentTime) => Value::Text(now_utc("%H:%M:%S")),
+    }
+}
+
+/// Find the first UNIQUE-column conflict for `values` (ignoring the rowid alias,
+/// which the b-tree key already enforces). Returns `(column index, rowid)`.
+fn find_unique_conflict(
+    tx: &WriteTx,
+    tree: &BTree,
+    table: &Table,
+    values: &[Value],
+    exclude: Option<i64>,
+) -> Result<Option<(usize, i64)>> {
+    let unique_cols: Vec<usize> = table
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(i, c)| c.unique && Some(*i) != table.rowid_alias && !values[*i].is_null())
+        .map(|(i, _)| i)
+        .collect();
+    if unique_cols.is_empty() {
+        return Ok(None);
+    }
+    let mut cursor = tree.cursor(tx)?;
+    while let Some((rowid, bytes)) = cursor.next()? {
+        if Some(rowid) == exclude {
+            continue;
+        }
+        let row = Row::decode(rowid, &bytes)?;
+        for &ci in &unique_cols {
+            if row.values.get(ci) == Some(&values[ci]) {
+                return Ok(Some((ci, rowid)));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Current UTC time formatted like SQLite's `CURRENT_*` defaults.
+fn now_utc(fmt: &str) -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    // Civil date from Unix seconds (Howard Hinnant's algorithm).
+    let days = secs.div_euclid(86_400);
+    let tod = secs.rem_euclid(86_400);
+    let (hh, mm, ss) = (tod / 3600, (tod % 3600) / 60, tod % 60);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = y + i64::from(m <= 2);
+    fmt.replace("%Y", &format!("{year:04}"))
+        .replace("%m", &format!("{m:02}"))
+        .replace("%d", &format!("{d:02}"))
+        .replace("%H", &format!("{hh:02}"))
+        .replace("%M", &format!("{mm:02}"))
+        .replace("%S", &format!("{ss:02}"))
 }
 
 /// Set the rowid-alias column (if any) to NULL before encoding, matching SQLite.

@@ -17,6 +17,7 @@ pub const SQLITE_CORRUPT: c_int = 11;
 pub const SQLITE_NOTFOUND: c_int = 12;
 pub const SQLITE_FULL: c_int = 13;
 pub const SQLITE_CANTOPEN: c_int = 14;
+pub const SQLITE_CONSTRAINT: c_int = 19;
 pub const SQLITE_MISUSE: c_int = 21;
 pub const SQLITE_RANGE: c_int = 25;
 pub const SQLITE_ROW: c_int = 100;

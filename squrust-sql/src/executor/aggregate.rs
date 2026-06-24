@@ -17,17 +17,22 @@ pub struct AggExec {
     aggs: Vec<AggExpr>,
     output: Vec<OutputCol>,
     columns: Vec<ColumnInfo>,
+    base_len: usize,
+    having: Option<Expr>,
     params: Params,
     produced: Option<std::vec::IntoIter<Row>>,
 }
 
 impl AggExec {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         input: Box<dyn Executor>,
         group_by: Vec<Expr>,
         aggs: Vec<AggExpr>,
         output: Vec<OutputCol>,
         columns: Vec<ColumnInfo>,
+        base_len: usize,
+        having: Option<Expr>,
         params: Params,
     ) -> Self {
         AggExec {
@@ -36,6 +41,8 @@ impl AggExec {
             aggs,
             output,
             columns,
+            base_len,
+            having,
             params,
             produced: None,
         }
@@ -80,10 +87,28 @@ impl AggExec {
 
         let mut out = Vec::with_capacity(groups.len());
         for group in groups {
+            // Finalize every aggregate once; reused by HAVING and the output.
+            let finalized: Vec<Value> = self
+                .aggs
+                .iter()
+                .enumerate()
+                .map(|(i, a)| group.accs[i].finalize(a))
+                .collect();
+
+            // HAVING filters groups, evaluated over [input cols .. | agg results].
+            if let Some(h) = &self.having {
+                let mut augmented = group.rep.values.clone();
+                augmented.resize(self.base_len, Value::Null);
+                augmented.extend(finalized.iter().cloned());
+                if !eval(h, &augmented, group.rep.row_id, &self.params)?.is_truthy() {
+                    continue;
+                }
+            }
+
             let mut values = Vec::with_capacity(self.output.len());
             for col in &self.output {
                 match col {
-                    OutputCol::Agg(i) => values.push(group.accs[*i].finalize(&self.aggs[*i])),
+                    OutputCol::Agg(i) => values.push(finalized[*i].clone()),
                     OutputCol::Expr(e) => {
                         let v = if group.has_rep {
                             eval(e, &group.rep.values, group.rep.row_id, &self.params)?

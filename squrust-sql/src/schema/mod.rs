@@ -7,13 +7,26 @@ use squrust_core::PageId;
 use crate::types::SqlType;
 use crate::types::Value;
 
+/// A column's `DEFAULT`. Dynamic keyword defaults are evaluated per-insert.
+#[derive(Debug, Clone)]
+pub enum DefaultExpr {
+    Value(Value),
+    CurrentTimestamp,
+    CurrentDate,
+    CurrentTime,
+}
+
 #[derive(Debug, Clone)]
 pub struct Column {
     pub name: String,
+    /// The declared type text from `CREATE TABLE` (e.g. "TIMESTAMP"), used for
+    /// `sqlite3_column_decltype` / PARSE_DECLTYPES. Empty if the column is typeless.
+    pub decl_type: String,
     pub sql_type: SqlType,
     pub not_null: bool,
     pub primary_key: bool,
-    pub default: Option<Value>,
+    pub unique: bool,
+    pub default: Option<DefaultExpr>,
 }
 
 #[derive(Debug, Clone)]

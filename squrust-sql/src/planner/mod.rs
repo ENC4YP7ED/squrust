@@ -24,6 +24,9 @@ use resolver::{Scope, ScopeCol, contains_aggregate, is_aggregate_name, resolve_e
 pub struct ColumnInfo {
     pub name: String,
     pub table: Option<String>,
+    /// Declared type (for `sqlite3_column_decltype`), if this output column maps
+    /// directly to a table column.
+    pub decl_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +93,12 @@ pub enum LogicalPlan {
         aggs: Vec<AggExpr>,
         output: Vec<OutputCol>,
         columns: Vec<ColumnInfo>,
+        /// Number of input columns (offset where agg results begin in the
+        /// per-group augmented row used to evaluate `having`).
+        base_len: usize,
+        /// HAVING predicate over the augmented row: input columns are
+        /// `Column(0..base_len)`, aggregate `i` is `Column(base_len + i)`.
+        having: Option<Expr>,
     },
     Sort {
         input: Box<LogicalPlan>,
@@ -99,6 +108,9 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         limit: Option<u64>,
         offset: u64,
+    },
+    Distinct {
+        input: Box<LogicalPlan>,
     },
 }
 
@@ -112,7 +124,8 @@ impl LogicalPlan {
             | LogicalPlan::Aggregate { columns, .. } => columns.clone(),
             LogicalPlan::Filter { input, .. }
             | LogicalPlan::Sort { input, .. }
-            | LogicalPlan::Limit { input, .. } => input.columns(),
+            | LogicalPlan::Limit { input, .. }
+            | LogicalPlan::Distinct { input } => input.columns(),
         }
     }
 }
@@ -227,8 +240,17 @@ fn table_scope(table: &Table) -> Scope {
                 table: Some(table.name.clone()),
                 name: c.name.clone(),
                 sql_type: c.sql_type,
+                decl_type: decl_opt(&c.decl_type),
             })
             .collect(),
+    }
+}
+
+fn decl_opt(decl: &str) -> Option<String> {
+    if decl.is_empty() {
+        None
+    } else {
+        Some(decl.to_string())
     }
 }
 
@@ -242,6 +264,7 @@ fn scan_for(table: &Table) -> LogicalPlan {
             .map(|c| ColumnInfo {
                 name: c.name.clone(),
                 table: Some(table.name.clone()),
+                decl_type: decl_opt(&c.decl_type),
             })
             .collect(),
         rowid_alias: table.rowid_alias,
@@ -285,8 +308,19 @@ fn plan_query(q: &Query, catalog: &Catalog, ctx: &mut ResolveCtx) -> Result<Logi
             _ => false,
         });
 
+    let distinct = match &select.distinct {
+        None => false,
+        Some(sqlparser::ast::Distinct::Distinct) => true,
+        Some(other) => return Err(SqlError::Unsupported(format!("{other}"))),
+    };
+
     if has_agg {
         node = plan_aggregate(node, select, group_exprs, &scope, ctx)?;
+        if distinct {
+            node = LogicalPlan::Distinct {
+                input: Box::new(node),
+            };
+        }
         node = apply_order_limit(node, q, ctx, OrderScope::Output)?;
     } else {
         // ORDER BY runs on base rows (before projection).
@@ -304,6 +338,11 @@ fn plan_query(q: &Query, catalog: &Catalog, ctx: &mut ResolveCtx) -> Result<Logi
             exprs,
             columns,
         };
+        if distinct {
+            node = LogicalPlan::Distinct {
+                input: Box::new(node),
+            };
+        }
         node = apply_limit(node, q, ctx)?;
     }
 
@@ -358,6 +397,7 @@ fn plan_from(select: &Select, catalog: &Catalog) -> Result<(LogicalPlan, Scope)>
         .map(|c| ColumnInfo {
             name: c.name.clone(),
             table: c.table.clone(),
+            decl_type: c.decl_type.clone(),
         })
         .collect();
 
@@ -408,6 +448,7 @@ fn collect_projection(
                         ColumnInfo {
                             name: c.name.clone(),
                             table: c.table.clone(),
+                            decl_type: c.decl_type.clone(),
                         },
                     ));
                 }
@@ -421,6 +462,7 @@ fn collect_projection(
                             ColumnInfo {
                                 name: c.name.clone(),
                                 table: c.table.clone(),
+                                decl_type: c.decl_type.clone(),
                             },
                         ));
                     }
@@ -428,27 +470,39 @@ fn collect_projection(
             }
             SelectItem::UnnamedExpr(e) => {
                 let expr = resolve_expr(e, scope, ctx)?;
+                let decl_type = decl_for_expr(&expr, scope);
                 out.push((
                     expr,
                     ColumnInfo {
                         name: derive_name(e),
                         table: None,
+                        decl_type,
                     },
                 ));
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let expr = resolve_expr(expr, scope, ctx)?;
+                let decl_type = decl_for_expr(&expr, scope);
                 out.push((
                     expr,
                     ColumnInfo {
                         name: alias.value.clone(),
                         table: None,
+                        decl_type,
                     },
                 ));
             }
         }
     }
     Ok(out)
+}
+
+/// Declared type for a projected expression, if it's a direct column reference.
+fn decl_for_expr(expr: &Expr, scope: &Scope) -> Option<String> {
+    match expr {
+        Expr::Column(i) => scope.cols.get(*i).and_then(|c| c.decl_type.clone()),
+        _ => None,
+    }
 }
 
 fn derive_name(e: &SqlExpr) -> String {
@@ -473,9 +527,12 @@ fn plan_aggregate(
         .map(|e| resolve_expr(e, scope, ctx))
         .collect::<Result<_>>()?;
 
+    let base_len = scope.cols.len();
     let mut aggs: Vec<AggExpr> = Vec::new();
     let mut output: Vec<OutputCol> = Vec::new();
     let mut columns: Vec<ColumnInfo> = Vec::new();
+    // alias (lowercased) -> its value in augmented-row terms, for HAVING.
+    let mut aliases: std::collections::HashMap<String, Expr> = std::collections::HashMap::new();
 
     for item in &select.projection {
         let (sql_expr, name) = match item {
@@ -489,12 +546,27 @@ fn plan_aggregate(
         };
         if let Some(agg) = try_aggregate(sql_expr, scope, ctx)? {
             aggs.push(agg);
-            output.push(OutputCol::Agg(aggs.len() - 1));
+            let idx = aggs.len() - 1;
+            output.push(OutputCol::Agg(idx));
+            aliases.insert(name.to_ascii_lowercase(), Expr::Column(base_len + idx));
         } else {
-            output.push(OutputCol::Expr(resolve_expr(sql_expr, scope, ctx)?));
+            let resolved = resolve_expr(sql_expr, scope, ctx)?;
+            aliases.insert(name.to_ascii_lowercase(), resolved.clone());
+            output.push(OutputCol::Expr(resolved));
         }
-        columns.push(ColumnInfo { name, table: None });
+        columns.push(ColumnInfo {
+            name,
+            table: None,
+            decl_type: None,
+        });
     }
+
+    let having = match &select.having {
+        Some(h) => Some(resolver::resolve_having(
+            h, scope, base_len, &mut aggs, ctx, &aliases,
+        )?),
+        None => None,
+    };
 
     Ok(LogicalPlan::Aggregate {
         input: Box::new(input),
@@ -502,6 +574,8 @@ fn plan_aggregate(
         aggs,
         output,
         columns,
+        base_len,
+        having,
     })
 }
 
@@ -524,6 +598,12 @@ fn try_aggregate(e: &SqlExpr, scope: &Scope, ctx: &mut ResolveCtx) -> Result<Opt
         ),
         _ => (false, &[][..]),
     };
+
+    // min()/max() with two or more arguments are *scalar* functions, not
+    // aggregates (SQLite semantics). Defer them to the scalar evaluator.
+    if matches!(name.as_str(), "MIN" | "MAX") && args.len() > 1 {
+        return Ok(None);
+    }
 
     // COUNT(*) has a single wildcard argument.
     if name == "COUNT"
@@ -584,6 +664,7 @@ fn apply_order_limit(
                     table: c.table.clone(),
                     name: c.name.clone(),
                     sql_type: crate::types::SqlType::Null,
+                    decl_type: c.decl_type.clone(),
                 })
                 .collect(),
         };

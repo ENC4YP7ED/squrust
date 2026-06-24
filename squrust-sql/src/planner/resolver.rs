@@ -8,6 +8,7 @@ use sqlparser::ast::{
 
 use crate::ddl;
 use crate::error::{Result, SqlError};
+use crate::planner::AggExpr;
 use crate::planner::expr::{BinOp, Expr, UnOp};
 use crate::types::SqlType;
 
@@ -17,6 +18,7 @@ pub struct ScopeCol {
     pub table: Option<String>,
     pub name: String,
     pub sql_type: SqlType,
+    pub decl_type: Option<String>,
 }
 
 /// The ordered set of columns available to expressions, matching the row layout.
@@ -63,7 +65,15 @@ pub fn is_aggregate_name(name: &str) -> bool {
 pub fn contains_aggregate(expr: &SqlExpr) -> bool {
     match expr {
         SqlExpr::Function(f) => {
-            is_aggregate_name(&ddl::object_name_to_string(&f.name)) || {
+            let name = ddl::object_name_to_string(&f.name).to_ascii_uppercase();
+            let arg_count = match &f.args {
+                FunctionArguments::List(list) => list.args.len(),
+                _ => 0,
+            };
+            // min()/max() with ≥2 args are scalar, not aggregate.
+            let is_agg = is_aggregate_name(&name)
+                && !(matches!(name.as_str(), "MIN" | "MAX") && arg_count > 1);
+            is_agg || {
                 if let FunctionArguments::List(list) = &f.args {
                     list.args.iter().any(|a| match a {
                         FunctionArg::Unnamed(FunctionArgExpr::Expr(e))
@@ -83,6 +93,58 @@ pub fn contains_aggregate(expr: &SqlExpr) -> bool {
         }
         SqlExpr::UnaryOp { expr, .. } | SqlExpr::Nested(expr) => contains_aggregate(expr),
         _ => false,
+    }
+}
+
+/// Resolve a HAVING predicate over a per-group "augmented" row: input columns
+/// are `Column(0..base_len)` (evaluated against a representative group row) and
+/// each aggregate becomes `Column(base_len + i)` after being appended to `aggs`.
+pub fn resolve_having(
+    e: &SqlExpr,
+    scope: &Scope,
+    base_len: usize,
+    aggs: &mut Vec<AggExpr>,
+    ctx: &mut ResolveCtx,
+    aliases: &std::collections::HashMap<String, Expr>,
+) -> Result<Expr> {
+    // An aggregate call anywhere in HAVING is computed per group and referenced
+    // positionally in the augmented row.
+    if let Some(agg) = super::try_aggregate(e, scope, ctx)? {
+        aggs.push(agg);
+        return Ok(Expr::Column(base_len + aggs.len() - 1));
+    }
+    match e {
+        SqlExpr::Nested(inner) => resolve_having(inner, scope, base_len, aggs, ctx, aliases),
+        SqlExpr::BinaryOp { left, op, right } => Ok(Expr::Binary {
+            op: map_binop(op)?,
+            left: Box::new(resolve_having(left, scope, base_len, aggs, ctx, aliases)?),
+            right: Box::new(resolve_having(right, scope, base_len, aggs, ctx, aliases)?),
+        }),
+        SqlExpr::UnaryOp { op, expr } => {
+            let inner = resolve_having(expr, scope, base_len, aggs, ctx, aliases)?;
+            match op {
+                UnaryOperator::Not => Ok(Expr::Unary {
+                    op: UnOp::Not,
+                    expr: Box::new(inner),
+                }),
+                UnaryOperator::Minus => Ok(Expr::Unary {
+                    op: UnOp::Neg,
+                    expr: Box::new(inner),
+                }),
+                UnaryOperator::Plus => Ok(inner),
+                other => Err(SqlError::Unsupported(format!("unary operator {other:?}"))),
+            }
+        }
+        // A bare name may be a base column or a SELECT-list alias (SQLite allows
+        // HAVING to reference output aliases). Base column wins.
+        SqlExpr::Identifier(id) if scope.resolve(None, &id.value).is_err() => {
+            match aliases.get(&id.value.to_ascii_lowercase()) {
+                Some(ex) => Ok(ex.clone()),
+                None => resolve_expr(e, scope, ctx),
+            }
+        }
+        // A subtree with no aggregate resolves normally against the base scope.
+        _ => resolve_expr(e, scope, ctx),
     }
 }
 

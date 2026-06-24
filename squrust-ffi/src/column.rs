@@ -144,10 +144,16 @@ pub unsafe extern "C" fn sqlite3_column_bytes(s: *mut sqlite3_stmt, col: c_int) 
 /// `s` from `sqlite3_prepare_v2`.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_column_decltype(
-    _s: *mut sqlite3_stmt,
-    _col: c_int,
+    s: *mut sqlite3_stmt,
+    col: c_int,
 ) -> *const c_char {
-    ptr::null()
+    match stmt(s) {
+        Some(st) => {
+            st.ensure_columns();
+            st.decltype_ptr(col)
+        }
+        None => ptr::null(),
+    }
 }
 
 fn cache_text(st: &mut StmtState, col: c_int, cs: CString) {

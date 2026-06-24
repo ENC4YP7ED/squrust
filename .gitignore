@@ -4,3 +4,7 @@
 # transient memory DBs
 squrust-mem-*.db
 *-squrust-wal
+
+# local-only working tracker (never commit)
+ROADMAP.local.md
+*.local.md

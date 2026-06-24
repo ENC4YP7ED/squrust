@@ -44,6 +44,8 @@ fn fold_plan(plan: LogicalPlan) -> LogicalPlan {
             aggs,
             output,
             columns,
+            base_len,
+            having,
         } => LogicalPlan::Aggregate {
             input: Box::new(fold_plan(*input)),
             group_by: group_by.into_iter().map(fold).collect(),
@@ -56,6 +58,8 @@ fn fold_plan(plan: LogicalPlan) -> LogicalPlan {
                 })
                 .collect(),
             columns,
+            base_len,
+            having: having.map(fold),
         },
         LogicalPlan::Sort { input, keys } => LogicalPlan::Sort {
             input: Box::new(fold_plan(*input)),
@@ -75,6 +79,9 @@ fn fold_plan(plan: LogicalPlan) -> LogicalPlan {
             input: Box::new(fold_plan(*input)),
             limit,
             offset,
+        },
+        LogicalPlan::Distinct { input } => LogicalPlan::Distinct {
+            input: Box::new(fold_plan(*input)),
         },
         leaf => leaf,
     }
