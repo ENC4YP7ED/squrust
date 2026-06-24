@@ -22,7 +22,7 @@ discuss.
 
 ## SQL surface
 
-- More built-ins: `printf`, `glob`, math, JSON1.
+- JSON1 functions (`json`, `json_extract`, `->`, `->>`, …).
 - **User-defined functions/collations** through the C API (`create_function`,
   `create_collation`) — currently accepted but inert.
 - **Byte-exact float text**: float notation now follows SQLite's `%g` rules,

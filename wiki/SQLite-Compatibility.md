@@ -104,6 +104,16 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
   `rtrim`, `instr`, `hex`, `char`, `unicode`, `sign`, `quote`, and multi-argument
   `min`/`max` (the two-or-more-arg scalar form — NULL if any argument is NULL;
   single-argument `min`/`max` are the aggregates above).
+- **`printf` / `format`:** C-style with flags (`-`, `0`, `+`, space, `#`), width
+  and precision, and `%d/%i/%u/%s/%f/%e/%g/%x/%X/%o/%c/%%` (incl. SQLite's `%c`
+  and missing-argument quirks).
+- **`glob(pattern, text)`:** case-sensitive `*`, `?`, and `[...]`/`[^...]`
+  classes.
+- **Math functions:** `sqrt`, `pow`/`power`, `ceil`/`ceiling`, `floor`, `trunc`,
+  `ln`, `log`/`log10`/`log2`, `exp`, `sin`/`cos`/`tan`, `asin`/`acos`/`atan`,
+  `atan2`, `pi`, `mod`, `radians`, `degrees` (return REAL; a domain error is
+  NULL).
+- **`random()`, `randomblob(n)`, `zeroblob(n)`.**
 - **Date/time functions:** `date`, `time`, `datetime`, `julianday`, `unixepoch`,
   `strftime` — a faithful port of SQLite's `date.c`, byte-identical on the
   supported time strings (`'now'`, ISO `YYYY-MM-DD[ T]HH:MM[:SS[.FFF]][Z]`, raw
