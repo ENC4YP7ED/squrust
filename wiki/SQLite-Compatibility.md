@@ -122,9 +122,11 @@ These are **not** implemented yet (a non-exhaustive list):
   allocation is used).
 - **User-defined functions / collations**, `PRAGMA`s beyond the four below
   (others are accepted as no-ops), JSON1, FTS, math extensions.
-- **Float display** differs from SQLite (Rust's shortest round-trip vs SQLite's
-  15-significant-digit formatting) — the **stored value is identical**, only the
-  text rendering differs.
+- **Float display**: notation matches SQLite (`%g` rules — exponential for
+  exponents `< -4` or `> 16`, a decimal point always kept, `-0.0` → `0.0`), but
+  the significant digits use Rust's shortest round-trip, so a value needing the
+  full 17 digits (e.g. `1.0/3.0`) can differ in the **final digit**. The
+  **stored value is identical**; only that last text digit differs.
 - `:memory:` is backed by a private temp file that's removed on close (behaves
   like an in-memory DB, but isn't literally RAM-only).
 

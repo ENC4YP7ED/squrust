@@ -23,8 +23,11 @@ discuss.
 - More built-ins: `printf`, `glob`, math, JSON1.
 - **User-defined functions/collations** through the C API (`create_function`,
   `create_collation`) — currently accepted but inert.
-- Match SQLite's **float text formatting** (15 significant digits) so rendered
-  output is byte-identical (stored values already match).
+- **Byte-exact float text**: float notation now follows SQLite's `%g` rules,
+  but the significant digits use Rust's shortest round-trip, so a value needing
+  the full 17 digits (e.g. `1.0/3.0`) can differ from SQLite in the final digit.
+  Closing the gap means porting SQLite's bespoke decimal conversion
+  (`sqlite3Fp2Convert10`). The stored value is already identical.
 
 ## Storage
 
