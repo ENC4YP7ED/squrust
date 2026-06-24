@@ -330,6 +330,13 @@ fn eval_function(name: &str, args: &[Value]) -> Result<Value> {
                 best
             }
         }
+        // Date/time functions (SQLite-compatible; see `datetime` module).
+        "DATE" => super::datetime::date(args),
+        "TIME" => super::datetime::time(args),
+        "DATETIME" => super::datetime::datetime(args),
+        "JULIANDAY" => super::datetime::julianday(args),
+        "UNIXEPOCH" => super::datetime::unixepoch(args),
+        "STRFTIME" => super::datetime::strftime(args),
         "COALESCE" => args
             .iter()
             .find(|v| !v.is_null())

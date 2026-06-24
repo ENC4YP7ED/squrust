@@ -2,6 +2,7 @@
 //! via [`Executor::next`]. Read access comes from a shared `ReadTx`.
 
 pub mod aggregate;
+pub mod datetime;
 pub mod distinct;
 pub mod dml;
 pub mod eval;

@@ -467,3 +467,33 @@ async fn alter_table_add_column() {
     // Duplicate column name is rejected.
     assert!(eng.execute_ddl("ALTER TABLE t ADD COLUMN b TEXT").await.is_err());
 }
+
+#[tokio::test]
+async fn datetime_functions() {
+    let eng = engine().await;
+    let one = |r: Vec<Vec<Value>>| r.into_iter().next().unwrap().into_iter().next().unwrap();
+
+    // Core formatting and parsing.
+    assert_eq!(one(rows(&eng, "SELECT date('2024-02-29 13:45:09')", &[]).await), Value::Text("2024-02-29".into()));
+    assert_eq!(one(rows(&eng, "SELECT time('2024-02-29 13:45:09')", &[]).await), Value::Text("13:45:09".into()));
+    assert_eq!(one(rows(&eng, "SELECT datetime('2024-02-29T13:45')", &[]).await), Value::Text("2024-02-29 13:45:00".into()));
+
+    // Modifiers: month overflow, start of, minutes, weekday.
+    assert_eq!(one(rows(&eng, "SELECT date('2024-01-31','+1 month')", &[]).await), Value::Text("2024-03-02".into()));
+    assert_eq!(one(rows(&eng, "SELECT date('2024-03-15','start of month')", &[]).await), Value::Text("2024-03-01".into()));
+    assert_eq!(one(rows(&eng, "SELECT datetime('2024-02-29 13:45:09','+90 minutes')", &[]).await), Value::Text("2024-02-29 15:15:09".into()));
+    assert_eq!(one(rows(&eng, "SELECT date('2024-06-15','weekday 0')", &[]).await), Value::Text("2024-06-16".into()));
+
+    // julianday / unixepoch round trips.
+    assert_eq!(one(rows(&eng, "SELECT julianday('2024-02-29')", &[]).await), Value::Real(2460369.5));
+    assert_eq!(one(rows(&eng, "SELECT unixepoch('2024-02-29 13:45:09')", &[]).await), Value::Integer(1709214309));
+    assert_eq!(one(rows(&eng, "SELECT datetime(1709214309,'unixepoch')", &[]).await), Value::Text("2024-02-29 13:45:09".into()));
+
+    // strftime codes.
+    assert_eq!(one(rows(&eng, "SELECT strftime('%j %w %s','2024-02-29 13:45:09')", &[]).await), Value::Text("060 4 1709214309".into()));
+    assert_eq!(one(rows(&eng, "SELECT strftime('%G-W%V-%u','2024-01-01')", &[]).await), Value::Text("2024-W01-1".into()));
+
+    // Invalid inputs yield NULL.
+    assert_eq!(one(rows(&eng, "SELECT date('2024-13-40')", &[]).await), Value::Null);
+    assert_eq!(one(rows(&eng, "SELECT datetime('not a date')", &[]).await), Value::Null);
+}
