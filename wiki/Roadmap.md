@@ -15,7 +15,8 @@ discuss.
   index b-trees instead of a full scan.
 - **Joins** — 3+ tables, comma joins, `RIGHT`/`FULL` outer, hash joins.
 - **Subqueries / CTEs / set operations**.
-- **`ALTER TABLE`**, foreign keys, triggers, views.
+- **`ALTER TABLE`** beyond `ADD COLUMN` (rename table/column, drop column),
+  foreign keys, triggers, views.
 
 ## SQL surface
 

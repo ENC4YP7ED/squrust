@@ -94,7 +94,7 @@ and runs directly against a `WriteTx`.
   `LIMIT`/`OFFSET`, `GROUP BY` + aggregates + `HAVING`, expressions & scalar
   functions, `CASE`, `CAST`.
 - `INSERT` (incl. `INSERT OR REPLACE`, multi-row `VALUES`), `UPDATE`, `DELETE`.
-- `CREATE TABLE` / `CREATE INDEX` / `DROP TABLE`.
+- `CREATE TABLE` / `CREATE INDEX` / `DROP TABLE` / `ALTER TABLE … ADD COLUMN`.
 - Inner and left-outer **two-table** nested-loop joins.
 - `BEGIN` / `COMMIT` / `ROLLBACK` (real transactions through the [[Async API]]
   and [[C ABI and LD_PRELOAD]]).

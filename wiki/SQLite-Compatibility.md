@@ -74,7 +74,9 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
   `CASE` (simple & searched), `CAST`.
 - **DML:** `INSERT` (multi-row `VALUES`, `INSERT OR REPLACE`), `UPDATE`,
   `DELETE`.
-- **DDL:** `CREATE TABLE`, `CREATE INDEX` (recorded, not yet used), `DROP TABLE`.
+- **DDL:** `CREATE TABLE`, `CREATE INDEX` (recorded, not yet used), `DROP TABLE`,
+  `ALTER TABLE … ADD COLUMN` (rewrites `sqlite_master` in place; old rows are
+  padded with the column's constant default on read, like SQLite).
 - **Constraints & defaults:** `UNIQUE` enforced on `INSERT`, column `DEFAULT`s
   (incl. `CURRENT_TIMESTAMP`/`CURRENT_DATE`/`CURRENT_TIME`); a violation raises
   `SQLITE_CONSTRAINT` (→ Python `sqlite3.IntegrityError`).
@@ -103,8 +105,9 @@ These are **not** implemented yet (a non-exhaustive list):
 - **Joins beyond two tables**, comma joins, `RIGHT`/`FULL` joins, `USING`.
 - **Subqueries**, CTEs (`WITH`), set operations (`UNION`/`INTERSECT`/`EXCEPT`).
 - **Window functions.**
-- **`ALTER TABLE`**, foreign keys, triggers, views, `AUTOINCREMENT` semantics
-  (plain rowid allocation is used).
+- **`ALTER TABLE`** other than `ADD COLUMN` (rename table/column, drop column),
+  foreign keys, triggers, views, `AUTOINCREMENT` semantics (plain rowid
+  allocation is used).
 - **User-defined functions / collations**, most `PRAGMA`s (parsed as no-ops),
   date/time functions, JSON1, FTS, math extensions.
 - **Float display** differs from SQLite (Rust's shortest round-trip vs SQLite's
