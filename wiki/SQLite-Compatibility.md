@@ -69,7 +69,8 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
 
 - **DQL:** `SELECT` and `SELECT DISTINCT` with `WHERE`, `ORDER BY` (incl. by
   ordinal and by output alias), `LIMIT`/`OFFSET`, `GROUP BY` + `HAVING` over
-  `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` (each also `(DISTINCT …)`), expressions,
+  `COUNT`/`SUM`/`TOTAL`/`AVG`/`MIN`/`MAX`/`GROUP_CONCAT` (most also accept
+  `DISTINCT`; `group_concat` takes an optional separator), expressions,
   `CASE` (simple & searched), `CAST`.
 - **DML:** `INSERT` (multi-row `VALUES`, `INSERT OR REPLACE`), `UPDATE`,
   `DELETE`.
