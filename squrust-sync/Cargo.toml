@@ -1,0 +1,15 @@
+[package]
+name = "squrust-sync"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Blocking wrapper around squrust-async"
+
+[dependencies]
+squrust-async = { workspace = true }
+squrust-core = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

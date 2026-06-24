@@ -1,0 +1,26 @@
+[package]
+name = "squrust-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "sq — the Squrust command-line shell"
+
+[[bin]]
+name = "sq"
+path = "src/main.rs"
+
+[dependencies]
+squrust-async = { workspace = true }
+squrust-sql = { workspace = true }
+tokio = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+comfy-table = "7"
+serde_json = { workspace = true }
+csv = "1"
+rustyline = "14"
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

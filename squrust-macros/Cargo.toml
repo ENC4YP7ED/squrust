@@ -1,0 +1,23 @@
+[package]
+name = "squrust-macros"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Derive and function-like macros for Squrust"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+sqlparser = { workspace = true }
+
+[dev-dependencies]
+squrust-serde = { workspace = true }
+squrust-sql = { workspace = true }
+squrust-async = { workspace = true }
+squrust-macros = { workspace = true }
+tokio = { workspace = true }

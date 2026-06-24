@@ -1,0 +1,16 @@
+[package]
+name = "squrust-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "C ABI drop-in for libsqlite3, backed by Squrust"
+
+[lib]
+name = "squrust"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+squrust-core = { workspace = true }
+squrust-sql = { workspace = true }
+libc = { workspace = true }

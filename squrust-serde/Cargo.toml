@@ -1,0 +1,12 @@
+[package]
+name = "squrust-serde"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "FromRow / ToParams traits for Squrust"
+
+[dependencies]
+squrust-sql = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "squrust-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Squrust storage engine: pages, B-tree, WAL, MVCC"
+
+[dependencies]
+thiserror = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

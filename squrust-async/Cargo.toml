@@ -1,0 +1,21 @@
+[package]
+name = "squrust-async"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Idiomatic async Rust API for Squrust"
+
+[dependencies]
+squrust-core = { workspace = true }
+squrust-sql = { workspace = true }
+squrust-serde = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-stream = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+futures = { workspace = true }

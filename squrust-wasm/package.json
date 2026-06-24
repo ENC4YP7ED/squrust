@@ -1,0 +1,18 @@
+{
+  "name": "squrust",
+  "version": "0.1.0",
+  "description": "Squrust — an async SQLite-compatible database, compiled to WebAssembly",
+  "type": "module",
+  "main": "squrust_wasm.js",
+  "types": "index.d.ts",
+  "files": [
+    "squrust_wasm.js",
+    "squrust_wasm_bg.wasm",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "build": "wasm-pack build --target web --out-name squrust_wasm"
+  },
+  "keywords": ["sqlite", "database", "wasm", "sql", "opfs"],
+  "license": "MIT OR Apache-2.0"
+}
