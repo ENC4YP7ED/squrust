@@ -137,18 +137,81 @@ impl Value {
         match self {
             Value::Null => String::new(),
             Value::Integer(i) => i.to_string(),
-            Value::Real(r) => {
-                if r.fract() == 0.0 && r.is_finite() {
-                    format!("{r:.1}")
-                } else {
-                    r.to_string()
-                }
-            }
+            Value::Real(r) => format_real(*r),
             Value::Text(t) => t.clone(),
             Value::Boolean(b) => if *b { "1" } else { "0" }.to_string(),
             Value::Blob(b) => String::from_utf8_lossy(b).into_owned(),
             Value::Json(j) => j.to_string(),
         }
+    }
+}
+
+/// Render a float as SQLite does: `%g`-style notation (`%!.17g`) — exponential
+/// when the decimal exponent is `< -4` or `> 16`, otherwise fixed-point, always
+/// keeping a decimal point so reals stay distinct from integers.
+///
+/// The significant digits come from Rust's shortest round-trip formatting, which
+/// matches SQLite for integers and ordinary decimals; values that need the full
+/// 17 digits (e.g. `1.0/3.0`) may differ in the final digit from SQLite's custom
+/// decimal conversion. The stored f64 is, of course, identical.
+fn format_real(r: f64) -> String {
+    if r == 0.0 {
+        return "0.0".to_string(); // also normalizes -0.0, like SQLite
+    }
+    if !r.is_finite() {
+        return if r.is_nan() {
+            String::new()
+        } else if r < 0.0 {
+            "-Inf".to_string()
+        } else {
+            "Inf".to_string()
+        };
+    }
+    let neg = r < 0.0;
+    // `{:e}` yields a normalized `d.dddde<exp>`: shortest round-trip digits and
+    // the base-10 exponent of the leading digit.
+    let s = format!("{:e}", r.abs());
+    let (mant, exp_str) = s.split_once('e').unwrap();
+    let exp: i32 = exp_str.parse().unwrap();
+    let digits: String = mant.chars().filter(|c| *c != '.').collect();
+
+    let body = if !(-4..=16).contains(&exp) {
+        format_real_exp(&digits, exp)
+    } else {
+        format_real_fixed(&digits, exp)
+    };
+    if neg {
+        format!("-{body}")
+    } else {
+        body
+    }
+}
+
+fn format_real_exp(digits: &str, exp: i32) -> String {
+    let (first, rest) = digits.split_at(1);
+    let frac = if rest.is_empty() { "0" } else { rest };
+    let sign = if exp < 0 { '-' } else { '+' };
+    format!("{first}.{frac}e{sign}{:02}", exp.abs())
+}
+
+fn format_real_fixed(digits: &str, exp: i32) -> String {
+    let ndigits = digits.len() as i32;
+    if exp >= 0 {
+        let int_len = exp + 1;
+        if ndigits <= int_len {
+            let mut s = String::with_capacity(int_len as usize + 2);
+            s.push_str(digits);
+            for _ in 0..(int_len - ndigits) {
+                s.push('0');
+            }
+            s.push_str(".0");
+            s
+        } else {
+            let (i, f) = digits.split_at(int_len as usize);
+            format!("{i}.{f}")
+        }
+    } else {
+        format!("0.{}{}", "0".repeat((-exp - 1) as usize), digits)
     }
 }
 
@@ -343,5 +406,34 @@ mod tests {
             Value::Integer(1).coerce_to(SqlType::Text).unwrap(),
             Value::Text(_)
         ));
+    }
+}
+
+#[cfg(test)]
+mod float_fmt_tests {
+    use super::format_real;
+
+    #[test]
+    fn matches_sqlite_notation() {
+        // Fixed-point and integer-valued reals keep a decimal point.
+        assert_eq!(format_real(1.0), "1.0");
+        assert_eq!(format_real(100.0), "100.0");
+        assert_eq!(format_real(1.5), "1.5");
+        assert_eq!(format_real(0.1), "0.1");
+        assert_eq!(format_real(0.0001), "0.0001");
+        assert_eq!(format_real(123.456), "123.456");
+        assert_eq!(format_real(123456789012345.0), "123456789012345.0");
+        // -0.0 normalizes to "0.0", as SQLite does.
+        assert_eq!(format_real(-0.0), "0.0");
+        assert_eq!(format_real(0.0), "0.0");
+        assert_eq!(format_real(-2.5), "-2.5");
+        // Exponential when exp < -4 or > 16.
+        assert_eq!(format_real(1e20), "1.0e+20");
+        assert_eq!(format_real(1e-10), "1.0e-10");
+        assert_eq!(format_real(1e17), "1.0e+17");
+        assert_eq!(format_real(1e16), "10000000000000000.0");
+        assert_eq!(format_real(1e-4), "0.0001");
+        assert_eq!(format_real(1e-5), "1.0e-05");
+        assert_eq!(format_real(0.000012345), "1.2345e-05");
     }
 }
