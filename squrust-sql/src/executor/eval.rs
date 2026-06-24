@@ -118,6 +118,11 @@ pub fn eval(expr: &Expr, values: &[Value], row_id: i64, params: &[Value]) -> Res
                 None => Ok(Value::Null),
             }
         }
+        // Non-correlated subqueries are evaluated to constants before execution;
+        // anything reaching here is correlated, which isn't supported yet.
+        Expr::ScalarSubquery(_) | Expr::Exists { .. } | Expr::InSubquery { .. } => Err(
+            SqlError::Unsupported("correlated subqueries are not supported".into()),
+        ),
     }
 }
 

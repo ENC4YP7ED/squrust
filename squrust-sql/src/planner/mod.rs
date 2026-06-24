@@ -463,6 +463,20 @@ fn plan_query(q: &Query, catalog: &Catalog, ctx: &mut ResolveCtx) -> Result<Logi
     Ok(node)
 }
 
+/// Plan a subquery `(SELECT ...)` into a logical plan. Used by the engine to
+/// pre-evaluate non-correlated subqueries. Bind parameters inside a subquery
+/// aren't supported (their numbering would collide with the outer query).
+pub fn plan_subquery(q: &Query, catalog: &Catalog) -> Result<LogicalPlan> {
+    let mut ctx = ResolveCtx::default();
+    let plan = optimizer::optimize(plan_query(q, catalog, &mut ctx)?);
+    if ctx.next_param > 0 {
+        return Err(SqlError::Unsupported(
+            "bind parameters inside subqueries are not supported".into(),
+        ));
+    }
+    Ok(plan)
+}
+
 fn plan_from(select: &Select, catalog: &Catalog) -> Result<(LogicalPlan, Scope)> {
     if select.from.is_empty() {
         return Ok((LogicalPlan::Dual, Scope::default()));

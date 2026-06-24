@@ -73,4 +73,18 @@ pub enum Expr {
         whens: Vec<(Expr, Expr)>,
         else_result: Option<Box<Expr>>,
     },
+    /// `(SELECT ...)` used as a scalar. The raw query AST is planned and
+    /// evaluated to a constant before execution (non-correlated only).
+    ScalarSubquery(Box<sqlparser::ast::Query>),
+    /// `[NOT] EXISTS (SELECT ...)`.
+    Exists {
+        query: Box<sqlparser::ast::Query>,
+        negated: bool,
+    },
+    /// `<expr> [NOT] IN (SELECT ...)`.
+    InSubquery {
+        expr: Box<Expr>,
+        query: Box<sqlparser::ast::Query>,
+        negated: bool,
+    },
 }

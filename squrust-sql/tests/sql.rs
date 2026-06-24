@@ -551,3 +551,33 @@ async fn multi_table_and_comma_joins() {
     let r = rows(&eng, "SELECT count(*) FROM a CROSS JOIN c", &[]).await;
     assert_eq!(r[0][0], Value::Integer(4));
 }
+
+#[tokio::test]
+async fn subqueries() {
+    let eng = engine().await;
+    eng.execute_ddl("CREATE TABLE t(id INTEGER, v INTEGER)").await.unwrap();
+    eng.execute("INSERT INTO t VALUES (1,10),(2,20),(3,30)", &[]).await.unwrap();
+    eng.execute_ddl("CREATE TABLE allowed(id INTEGER)").await.unwrap();
+    eng.execute("INSERT INTO allowed VALUES (1),(3)", &[]).await.unwrap();
+
+    // Scalar subquery.
+    let r = rows(&eng, "SELECT (SELECT max(v) FROM t)", &[]).await;
+    assert_eq!(r[0][0], Value::Integer(30));
+    let r = rows(&eng, "SELECT id FROM t WHERE v = (SELECT max(v) FROM t)", &[]).await;
+    assert_eq!(r, vec![vec![Value::Integer(3)]]);
+
+    // IN (SELECT ...) and NOT IN.
+    let r = rows(&eng, "SELECT id FROM t WHERE id IN (SELECT id FROM allowed) ORDER BY id", &[]).await;
+    assert_eq!(r, vec![vec![Value::Integer(1)], vec![Value::Integer(3)]]);
+    let r = rows(&eng, "SELECT id FROM t WHERE id NOT IN (SELECT id FROM allowed)", &[]).await;
+    assert_eq!(r, vec![vec![Value::Integer(2)]]);
+
+    // EXISTS / NOT EXISTS.
+    let r = rows(&eng, "SELECT count(*) FROM t WHERE EXISTS (SELECT 1 FROM allowed WHERE allowed.id=1)", &[]).await;
+    assert_eq!(r[0][0], Value::Integer(3));
+
+    // Subquery in DELETE.
+    eng.execute("DELETE FROM t WHERE id IN (SELECT id FROM allowed)", &[]).await.unwrap();
+    let r = rows(&eng, "SELECT id FROM t ORDER BY id", &[]).await;
+    assert_eq!(r, vec![vec![Value::Integer(2)]]);
+}

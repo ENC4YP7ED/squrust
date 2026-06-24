@@ -228,6 +228,22 @@ pub fn resolve_expr(expr: &SqlExpr, scope: &Scope, ctx: &mut ResolveCtx) -> Resu
                 .collect::<Result<_>>()?,
             negated: *negated,
         }),
+        // Subqueries: stash the raw AST; the engine plans and evaluates it to a
+        // constant (non-correlated) before execution.
+        SqlExpr::Subquery(q) => Ok(Expr::ScalarSubquery(q.clone())),
+        SqlExpr::Exists { subquery, negated } => Ok(Expr::Exists {
+            query: subquery.clone(),
+            negated: *negated,
+        }),
+        SqlExpr::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } => Ok(Expr::InSubquery {
+            expr: Box::new(resolve_expr(expr, scope, ctx)?),
+            query: subquery.clone(),
+            negated: *negated,
+        }),
         SqlExpr::Between {
             expr,
             negated,

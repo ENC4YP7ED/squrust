@@ -870,6 +870,7 @@ name = "squrust-sql"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures",
  "serde_json",
  "sqlparser",
  "squrust-core",

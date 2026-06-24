@@ -28,7 +28,7 @@ pub use row::{Row, RowId};
 pub use types::{SqlType, Value};
 
 use executor::dml;
-use planner::{Plan, plan};
+use planner::{Expr, LogicalPlan, OutputCol, Plan, plan};
 use schema::Table;
 use schema::catalog::{CATALOG_ROOT, Catalog};
 
@@ -142,7 +142,9 @@ impl SqlEngine {
         }
         let stmt = single_statement(sql)?;
         match self.plan_stmt(&stmt)? {
-            Plan::Query { plan, .. } => {
+            Plan::Query { mut plan, .. } => {
+                // Fold non-correlated subqueries to constants before building.
+                self.rewrite_plan_subqueries(&mut plan, &source, params)?;
                 let params: executor::Params = params.to_vec().into();
                 Ok(executor::build(plan, source, params))
             }
@@ -225,13 +227,239 @@ impl SqlEngine {
         }
     }
 
+    /// Walk a logical plan and replace every non-correlated subquery expression
+    /// with the constant (or `IN`-list) it evaluates to.
+    fn rewrite_plan_subqueries(
+        &self,
+        plan: &mut LogicalPlan,
+        source: &ReadSource,
+        params: &[Value],
+    ) -> Result<()> {
+        match plan {
+            LogicalPlan::Dual | LogicalPlan::Scan { .. } => {}
+            LogicalPlan::Filter { input, predicate } => {
+                self.rewrite_plan_subqueries(input, source, params)?;
+                self.rewrite_expr_subqueries(predicate, source, params)?;
+            }
+            LogicalPlan::Project { input, exprs, .. } => {
+                self.rewrite_plan_subqueries(input, source, params)?;
+                for e in exprs {
+                    self.rewrite_expr_subqueries(e, source, params)?;
+                }
+            }
+            LogicalPlan::NestedLoopJoin {
+                left,
+                right,
+                predicate,
+                ..
+            } => {
+                self.rewrite_plan_subqueries(left, source, params)?;
+                self.rewrite_plan_subqueries(right, source, params)?;
+                if let Some(p) = predicate {
+                    self.rewrite_expr_subqueries(p, source, params)?;
+                }
+            }
+            LogicalPlan::Aggregate {
+                input,
+                group_by,
+                aggs,
+                output,
+                having,
+                ..
+            } => {
+                self.rewrite_plan_subqueries(input, source, params)?;
+                for e in group_by {
+                    self.rewrite_expr_subqueries(e, source, params)?;
+                }
+                for a in aggs {
+                    if let Some(arg) = &mut a.arg {
+                        self.rewrite_expr_subqueries(arg, source, params)?;
+                    }
+                    if let Some(sep) = &mut a.sep {
+                        self.rewrite_expr_subqueries(sep, source, params)?;
+                    }
+                }
+                for o in output {
+                    if let OutputCol::Expr(e) = o {
+                        self.rewrite_expr_subqueries(e, source, params)?;
+                    }
+                }
+                if let Some(h) = having {
+                    self.rewrite_expr_subqueries(h, source, params)?;
+                }
+            }
+            LogicalPlan::Sort { input, keys } => {
+                self.rewrite_plan_subqueries(input, source, params)?;
+                for k in keys {
+                    self.rewrite_expr_subqueries(&mut k.expr, source, params)?;
+                }
+            }
+            LogicalPlan::Limit { input, .. } | LogicalPlan::Distinct { input } => {
+                self.rewrite_plan_subqueries(input, source, params)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Replace subquery nodes within an expression with their evaluated value.
+    fn rewrite_expr_subqueries(
+        &self,
+        e: &mut Expr,
+        source: &ReadSource,
+        params: &[Value],
+    ) -> Result<()> {
+        match e {
+            Expr::Literal(_) | Expr::Column(_) | Expr::RowId | Expr::Param(_) => {}
+            Expr::Binary { left, right, .. } => {
+                self.rewrite_expr_subqueries(left, source, params)?;
+                self.rewrite_expr_subqueries(right, source, params)?;
+            }
+            Expr::Unary { expr, .. }
+            | Expr::IsNull { expr, .. }
+            | Expr::Cast { expr, .. } => {
+                self.rewrite_expr_subqueries(expr, source, params)?;
+            }
+            Expr::Like { expr, pattern, .. } => {
+                self.rewrite_expr_subqueries(expr, source, params)?;
+                self.rewrite_expr_subqueries(pattern, source, params)?;
+            }
+            Expr::InList { expr, list, .. } => {
+                self.rewrite_expr_subqueries(expr, source, params)?;
+                for it in list {
+                    self.rewrite_expr_subqueries(it, source, params)?;
+                }
+            }
+            Expr::Function { args, .. } => {
+                for a in args {
+                    self.rewrite_expr_subqueries(a, source, params)?;
+                }
+            }
+            Expr::Case {
+                operand,
+                whens,
+                else_result,
+            } => {
+                if let Some(o) = operand {
+                    self.rewrite_expr_subqueries(o, source, params)?;
+                }
+                for (c, r) in whens {
+                    self.rewrite_expr_subqueries(c, source, params)?;
+                    self.rewrite_expr_subqueries(r, source, params)?;
+                }
+                if let Some(er) = else_result {
+                    self.rewrite_expr_subqueries(er, source, params)?;
+                }
+            }
+            Expr::ScalarSubquery(_) | Expr::Exists { .. } | Expr::InSubquery { .. } => {
+                // Take ownership of the node, then replace it with its value.
+                match std::mem::replace(e, Expr::RowId) {
+                    Expr::ScalarSubquery(q) => {
+                        let rows = self.subquery_rows(&q, source, params)?;
+                        // A scalar subquery yields its first row/column, or NULL.
+                        let v = rows
+                            .into_iter()
+                            .next()
+                            .and_then(|mut r| (!r.is_empty()).then(|| r.swap_remove(0)))
+                            .unwrap_or(Value::Null);
+                        *e = Expr::Literal(v);
+                    }
+                    Expr::Exists { query, negated } => {
+                        let exists = !self.subquery_rows(&query, source, params)?.is_empty();
+                        *e = Expr::Literal(Value::Boolean(exists != negated));
+                    }
+                    Expr::InSubquery {
+                        mut expr,
+                        query,
+                        negated,
+                    } => {
+                        self.rewrite_expr_subqueries(&mut expr, source, params)?;
+                        let list = self
+                            .subquery_rows(&query, source, params)?
+                            .into_iter()
+                            .map(|mut r| {
+                                Expr::Literal(if r.is_empty() {
+                                    Value::Null
+                                } else {
+                                    r.swap_remove(0)
+                                })
+                            })
+                            .collect();
+                        *e = Expr::InList {
+                            expr,
+                            list,
+                            negated,
+                        };
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Fold non-correlated subqueries in a DML plan's expressions, reading from
+    /// a fresh snapshot.
+    fn rewrite_dml_subqueries(&self, plan: &mut Plan, params: &[Value]) -> Result<()> {
+        let source: ReadSource = Arc::new(self.storage.begin_read());
+        match plan {
+            Plan::Insert(p) => {
+                for row in &mut p.rows {
+                    for e in row {
+                        self.rewrite_expr_subqueries(e, &source, params)?;
+                    }
+                }
+            }
+            Plan::Update(p) => {
+                for (_, e) in &mut p.assignments {
+                    self.rewrite_expr_subqueries(e, &source, params)?;
+                }
+                if let Some(pr) = &mut p.predicate {
+                    self.rewrite_expr_subqueries(pr, &source, params)?;
+                }
+            }
+            Plan::Delete(p) => {
+                if let Some(pr) = &mut p.predicate {
+                    self.rewrite_expr_subqueries(pr, &source, params)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Plan, fold, build and drain a subquery, returning its rows.
+    fn subquery_rows(
+        &self,
+        q: &sqlparser::ast::Query,
+        source: &ReadSource,
+        params: &[Value],
+    ) -> Result<Vec<Vec<Value>>> {
+        let mut sub_plan = {
+            let catalog = self.catalog.lock().unwrap();
+            planner::plan_subquery(q, &catalog)?
+        };
+        // Nested subqueries inside this one.
+        self.rewrite_plan_subqueries(&mut sub_plan, source, params)?;
+        let params_arc: executor::Params = params.to_vec().into();
+        let mut exec = executor::build(sub_plan, source.clone(), params_arc);
+        futures::executor::block_on(async move {
+            let mut out = Vec::new();
+            while let Some(r) = exec.next().await? {
+                out.push(r.values);
+            }
+            Ok(out)
+        })
+    }
+
     /// Execute DML (INSERT/UPDATE/DELETE) against an in-flight write transaction
     /// without committing it. DDL and SELECT are rejected here.
     pub async fn execute_on(&self, tx: &WriteTx, sql: &str, params: &[Value]) -> Result<u64> {
         let statements = parser::parse(sql)?;
         let mut affected = 0u64;
         for stmt in &statements {
-            affected = match self.plan_stmt(stmt)? {
+            let mut planned = self.plan_stmt(stmt)?;
+            self.rewrite_dml_subqueries(&mut planned, params)?;
+            affected = match planned {
                 Plan::Insert(p) => {
                     let table = self.clone_table(&p.table)?;
                     let res = dml::insert(tx, &table, &p, params)?;
@@ -278,10 +506,13 @@ impl SqlEngine {
     }
 
     async fn run_one(&self, stmt: &sqlparser::ast::Statement, params: &[Value]) -> Result<u64> {
-        match self.plan_stmt(stmt)? {
-            Plan::Query { plan, .. } => {
+        let mut planned = self.plan_stmt(stmt)?;
+        self.rewrite_dml_subqueries(&mut planned, params)?;
+        match planned {
+            Plan::Query { mut plan, .. } => {
                 // Run and discard rows.
                 let source: ReadSource = Arc::new(self.storage.begin_read());
+                self.rewrite_plan_subqueries(&mut plan, &source, params)?;
                 let params: executor::Params = params.to_vec().into();
                 let mut exec = executor::build(plan, source, params);
                 while exec.next().await?.is_some() {}
