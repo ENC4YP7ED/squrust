@@ -467,42 +467,59 @@ fn plan_from(select: &Select, catalog: &Catalog) -> Result<(LogicalPlan, Scope)>
     if select.from.is_empty() {
         return Ok((LogicalPlan::Dual, Scope::default()));
     }
-    if select.from.len() != 1 {
-        return Err(SqlError::Unsupported("comma-joined tables".into()));
-    }
-    let twj = &select.from[0];
-    let (left_table, left_alias) = table_factor(&twj.relation)?;
-    let left = lookup(catalog, &left_table)?;
-    let mut node = scan_for(left);
-    let mut scope = aliased_scope(left, left_alias.as_deref());
-
-    if twj.joins.is_empty() {
-        return Ok((node, scope));
-    }
-    if twj.joins.len() != 1 {
-        return Err(SqlError::Unsupported("more than one join".into()));
-    }
-    let join = &twj.joins[0];
-    let (right_table, right_alias) = table_factor(&join.relation)?;
-    let right = lookup(catalog, &right_table)?;
-    let right_scan = scan_for(right);
-    let right_scope = aliased_scope(right, right_alias.as_deref());
-
-    // Combined scope: left columns then right columns.
-    let mut combined = scope.clone();
-    combined.cols.extend(right_scope.cols.clone());
-
-    use sqlparser::ast::{JoinConstraint, JoinOperator};
     let mut ctx = ResolveCtx::default();
-    let (predicate, left_outer) = match &join.join_operator {
-        JoinOperator::Inner(JoinConstraint::On(e)) => {
-            (Some(resolve_expr(e, &combined, &mut ctx)?), false)
+    // Build a left-deep nested-loop tree. Comma-separated `FROM` entries are
+    // cross-joined; explicit `JOIN`s within an entry fold in left-to-right.
+    let mut acc: Option<(LogicalPlan, Scope)> = None;
+    for twj in &select.from {
+        let (t, alias) = table_factor(&twj.relation)?;
+        let tbl = lookup(catalog, &t)?;
+        let scan = scan_for(tbl);
+        let sc = aliased_scope(tbl, alias.as_deref());
+        acc = Some(match acc {
+            None => (scan, sc),
+            // A new FROM entry is an implicit cross join (no ON predicate).
+            Some((ln, ls)) => join_step(ln, ls, scan, sc, None, &mut ctx)?,
+        });
+        for join in &twj.joins {
+            let (jt, jalias) = table_factor(&join.relation)?;
+            let jtbl = lookup(catalog, &jt)?;
+            let jscan = scan_for(jtbl);
+            let jsc = aliased_scope(jtbl, jalias.as_deref());
+            let (ln, ls) = acc.take().expect("seeded above");
+            acc = Some(join_step(ln, ls, jscan, jsc, Some(&join.join_operator), &mut ctx)?);
         }
-        JoinOperator::LeftOuter(JoinConstraint::On(e)) => {
-            (Some(resolve_expr(e, &combined, &mut ctx)?), true)
+    }
+    Ok(acc.expect("non-empty FROM"))
+}
+
+/// Fold one relation into the accumulated join tree. `op` is `None` for an
+/// implicit (comma) cross join, otherwise the explicit join operator.
+fn join_step(
+    left_node: LogicalPlan,
+    left_scope: Scope,
+    right_scan: LogicalPlan,
+    right_scope: Scope,
+    op: Option<&sqlparser::ast::JoinOperator>,
+    ctx: &mut ResolveCtx,
+) -> Result<(LogicalPlan, Scope)> {
+    use sqlparser::ast::{JoinConstraint, JoinOperator};
+
+    // Combined scope: left columns then right columns (used to resolve ON).
+    let mut combined = left_scope;
+    combined.cols.extend(right_scope.cols);
+
+    let (predicate, left_outer) = match op {
+        None | Some(JoinOperator::Inner(JoinConstraint::None)) | Some(JoinOperator::CrossJoin) => {
+            (None, false)
         }
-        JoinOperator::Inner(JoinConstraint::None) | JoinOperator::CrossJoin => (None, false),
-        other => return Err(SqlError::Unsupported(format!("join type {other:?}"))),
+        Some(JoinOperator::Inner(JoinConstraint::On(e))) => {
+            (Some(resolve_expr(e, &combined, ctx)?), false)
+        }
+        Some(JoinOperator::LeftOuter(JoinConstraint::On(e))) => {
+            (Some(resolve_expr(e, &combined, ctx)?), true)
+        }
+        Some(other) => return Err(SqlError::Unsupported(format!("join type {other:?}"))),
     };
 
     let columns: Vec<ColumnInfo> = combined
@@ -515,15 +532,14 @@ fn plan_from(select: &Select, catalog: &Catalog) -> Result<(LogicalPlan, Scope)>
         })
         .collect();
 
-    node = LogicalPlan::NestedLoopJoin {
-        left: Box::new(node),
+    let node = LogicalPlan::NestedLoopJoin {
+        left: Box::new(left_node),
         right: Box::new(right_scan),
         predicate,
         left_outer,
         columns,
     };
-    scope = combined;
-    Ok((node, scope))
+    Ok((node, combined))
 }
 
 fn aliased_scope(table: &Table, alias: Option<&str>) -> Scope {

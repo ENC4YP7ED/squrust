@@ -523,3 +523,31 @@ async fn pragmas() {
     let r = rows(&eng, "PRAGMA user_version", &[]).await;
     assert_eq!(r[0][0], Value::Integer(7));
 }
+
+#[tokio::test]
+async fn multi_table_and_comma_joins() {
+    let eng = engine().await;
+    eng.execute_ddl("CREATE TABLE a(x INTEGER, av TEXT)").await.unwrap();
+    eng.execute_ddl("CREATE TABLE b(y INTEGER, bv TEXT)").await.unwrap();
+    eng.execute_ddl("CREATE TABLE c(z INTEGER, cv TEXT)").await.unwrap();
+    eng.execute("INSERT INTO a VALUES (1,'a1'),(2,'a2')", &[]).await.unwrap();
+    eng.execute("INSERT INTO b VALUES (1,'b1'),(2,'b2')", &[]).await.unwrap();
+    eng.execute("INSERT INTO c VALUES (1,'c1'),(2,'c2')", &[]).await.unwrap();
+
+    // Three-table inner join.
+    let r = rows(&eng, "SELECT a.av, b.bv, c.cv FROM a JOIN b ON a.x=b.y JOIN c ON b.y=c.z ORDER BY a.x", &[]).await;
+    assert_eq!(r.len(), 2);
+    assert_eq!(r[0], vec![Value::Text("a1".into()), Value::Text("b1".into()), Value::Text("c1".into())]);
+    assert_eq!(r[1], vec![Value::Text("a2".into()), Value::Text("b2".into()), Value::Text("c2".into())]);
+
+    // Comma join is a cross product filtered by WHERE.
+    let r = rows(&eng, "SELECT count(*) FROM a, b, c", &[]).await;
+    assert_eq!(r[0][0], Value::Integer(8));
+    let r = rows(&eng, "SELECT a.av, b.bv FROM a, b WHERE a.x = b.y ORDER BY a.x", &[]).await;
+    assert_eq!(r.len(), 2);
+    assert_eq!(r[0], vec![Value::Text("a1".into()), Value::Text("b1".into())]);
+
+    // CROSS JOIN of two tables.
+    let r = rows(&eng, "SELECT count(*) FROM a CROSS JOIN c", &[]).await;
+    assert_eq!(r[0][0], Value::Integer(4));
+}
