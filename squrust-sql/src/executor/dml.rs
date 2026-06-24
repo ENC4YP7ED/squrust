@@ -132,6 +132,25 @@ pub fn update(tx: &WriteTx, table: &Table, plan: &UpdatePlan, params: &[Value]) 
             }
         }
 
+        // UNIQUE re-check against the other rows (exclude the row itself).
+        if let Some((ci, _)) = find_unique_conflict(tx, &tree, table, &values, Some(rowid))? {
+            return Err(SqlError::Constraint(format!(
+                "UNIQUE constraint failed: {}.{}",
+                table.name, table.columns[ci].name
+            )));
+        }
+        // A changed INTEGER PRIMARY KEY must not collide with another rowid.
+        if new_rowid != rowid && tree.get(tx, new_rowid)?.is_some() {
+            return Err(SqlError::Constraint(format!(
+                "UNIQUE constraint failed: {}.{}",
+                table.name,
+                table
+                    .rowid_alias
+                    .map(|i| table.columns[i].name.as_str())
+                    .unwrap_or("rowid")
+            )));
+        }
+
         if new_rowid != rowid {
             tree.delete(tx, rowid)?;
         }

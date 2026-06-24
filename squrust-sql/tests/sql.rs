@@ -633,3 +633,25 @@ async fn set_operations() {
 
     assert!(eng.query("SELECT x FROM a UNION SELECT x, x FROM b", &[]).await.is_err());
 }
+
+#[tokio::test]
+async fn update_unique_enforcement() {
+    let eng = engine().await;
+    eng.execute_ddl("CREATE TABLE t(id INTEGER PRIMARY KEY, e TEXT UNIQUE)").await.unwrap();
+    eng.execute("INSERT INTO t VALUES (1,'a'),(2,'b')", &[]).await.unwrap();
+
+    // Updating a UNIQUE column to a value held by another row is rejected.
+    let err = eng.execute("UPDATE t SET e='b' WHERE id=1", &[]).await.unwrap_err();
+    assert!(matches!(err, squrust_sql::SqlError::Constraint(_)));
+
+    // Changing the PRIMARY KEY to a colliding rowid is rejected.
+    let err = eng.execute("UPDATE t SET id=2 WHERE id=1", &[]).await.unwrap_err();
+    assert!(matches!(err, squrust_sql::SqlError::Constraint(_)));
+
+    // Updating a row's UNIQUE column to its own value is fine.
+    eng.execute("UPDATE t SET e='a' WHERE id=1", &[]).await.unwrap();
+    // A non-conflicting update succeeds.
+    eng.execute("UPDATE t SET e='c' WHERE id=1", &[]).await.unwrap();
+    let r = rows(&eng, "SELECT id, e FROM t ORDER BY id", &[]).await;
+    assert_eq!(r[0], vec![Value::Integer(1), Value::Text("c".into())]);
+}
