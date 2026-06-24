@@ -27,10 +27,14 @@ pub unsafe extern "C" fn sqlite3_prepare_v2(
 
     let text = c_to_string(sql, n_byte).unwrap_or_default();
 
-    // Validate by parsing; surface syntax errors at prepare time.
-    if let Err(e) = squrust_sql::parser::parse(&text) {
-        c.set_error(SQLITE_ERROR, e.to_string());
-        return SQLITE_ERROR;
+    // Validate by parsing; surface syntax errors at prepare time. PRAGMAs are
+    // handled by a dedicated parser (they accept unquoted identifier arguments
+    // the SQL grammar rejects), so they skip this check.
+    if squrust_sql::pragma::try_parse(&text).is_none() {
+        if let Err(e) = squrust_sql::parser::parse(&text) {
+            c.set_error(SQLITE_ERROR, e.to_string());
+            return SQLITE_ERROR;
+        }
     }
 
     if !pz_tail.is_null() {

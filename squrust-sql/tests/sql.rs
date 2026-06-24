@@ -497,3 +497,29 @@ async fn datetime_functions() {
     assert_eq!(one(rows(&eng, "SELECT date('2024-13-40')", &[]).await), Value::Null);
     assert_eq!(one(rows(&eng, "SELECT datetime('not a date')", &[]).await), Value::Null);
 }
+
+#[tokio::test]
+async fn pragmas() {
+    let eng = engine().await;
+    eng.execute_ddl("CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT NOT NULL, c REAL DEFAULT 1.5)")
+        .await
+        .unwrap();
+
+    // table_info: cid, name, type, notnull, dflt_value, pk
+    let r = rows(&eng, "PRAGMA table_info(t)", &[]).await;
+    assert_eq!(r.len(), 3);
+    assert_eq!(r[0], vec![Value::Integer(0), Value::Text("a".into()), Value::Text("INTEGER".into()), Value::Integer(0), Value::Null, Value::Integer(1)]);
+    assert_eq!(r[1], vec![Value::Integer(1), Value::Text("b".into()), Value::Text("TEXT".into()), Value::Integer(1), Value::Null, Value::Integer(0)]);
+    assert_eq!(r[2][4], Value::Text("1.5".into()));
+
+    // foreign_keys defaults to 0.
+    let r = rows(&eng, "PRAGMA foreign_keys", &[]).await;
+    assert_eq!(r[0][0], Value::Integer(0));
+
+    // user_version get / set / get.
+    let r = rows(&eng, "PRAGMA user_version", &[]).await;
+    assert_eq!(r[0][0], Value::Integer(0));
+    eng.execute("PRAGMA user_version = 7", &[]).await.unwrap();
+    let r = rows(&eng, "PRAGMA user_version", &[]).await;
+    assert_eq!(r[0][0], Value::Integer(7));
+}

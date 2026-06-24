@@ -57,19 +57,28 @@ async fn main() -> Result<()> {
 /// Parse a (possibly multi-statement) string and run each statement, rendering
 /// result sets and reporting affected-row counts for DML.
 pub async fn run_sql(conn: &SqurustConnection, sql: &str, mode: Mode) -> Result<()> {
+    // A lone PRAGMA may carry an unquoted argument (e.g. `table_info(t)`) that
+    // the SQL parser rejects, so route it to the engine without pre-parsing.
+    if squrust_sql::pragma::try_parse(sql).is_some() {
+        return run_statement(conn, sql, mode).await;
+    }
     let statements = squrust_sql::parser::parse(sql)?;
     for stmt in &statements {
-        let text = stmt.to_string();
-        if is_query(&text) {
-            match conn.fetch_raw(&text, ()).await {
-                Ok((cols, rows)) => output::render(mode, &cols, &rows)?,
-                Err(e) => eprintln!("Error: {e}"),
-            }
-        } else {
-            match conn.execute(&text, ()).await {
-                Ok(_) => {}
-                Err(e) => eprintln!("Error: {e}"),
-            }
+        run_statement(conn, &stmt.to_string(), mode).await?;
+    }
+    Ok(())
+}
+
+async fn run_statement(conn: &SqurustConnection, text: &str, mode: Mode) -> Result<()> {
+    if is_query(text) {
+        match conn.fetch_raw(text, ()).await {
+            Ok((cols, rows)) => output::render(mode, &cols, &rows)?,
+            Err(e) => eprintln!("Error: {e}"),
+        }
+    } else {
+        match conn.execute(text, ()).await {
+            Ok(_) => {}
+            Err(e) => eprintln!("Error: {e}"),
         }
     }
     Ok(())
@@ -82,5 +91,5 @@ pub fn is_query(sql: &str) -> bool {
         .next()
         .unwrap_or("")
         .to_ascii_uppercase();
-    matches!(kw.as_str(), "SELECT" | "WITH" | "VALUES")
+    matches!(kw.as_str(), "SELECT" | "WITH" | "VALUES" | "PRAGMA")
 }

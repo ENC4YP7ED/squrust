@@ -14,6 +14,8 @@ pub struct DbHeader {
     pub schema_cookie: u32,
     pub freelist_trunk: u32,
     pub freelist_count: u32,
+    /// The `PRAGMA user_version` value (header offset 60).
+    pub user_version: u32,
 }
 
 impl Default for DbHeader {
@@ -25,6 +27,7 @@ impl Default for DbHeader {
             schema_cookie: 0,
             freelist_trunk: 0,
             freelist_count: 0,
+            user_version: 0,
         }
     }
 }
@@ -69,7 +72,7 @@ impl DbHeader {
         put_u32(buf, 48, 0); // default page cache size
         put_u32(buf, 52, 0); // largest root b-tree page (no auto-vacuum)
         put_u32(buf, OFF_TEXT_ENCODING, TEXT_ENCODING_UTF8);
-        put_u32(buf, 60, 0); // user version
+        put_u32(buf, 60, self.user_version);
         put_u32(buf, 64, 0); // incremental-vacuum mode
         put_u32(buf, 68, 0); // application id
         // The in-header db size is only trusted when this equals the change
@@ -94,6 +97,7 @@ impl DbHeader {
             schema_cookie: get_u32(buf, OFF_SCHEMA_COOKIE),
             freelist_trunk: get_u32(buf, OFF_FREELIST_TRUNK),
             freelist_count: get_u32(buf, OFF_FREELIST_COUNT),
+            user_version: get_u32(buf, 60),
         })
     }
 }
@@ -112,6 +116,7 @@ mod tests {
             schema_cookie: 3,
             freelist_trunk: 0,
             freelist_count: 0,
+            user_version: 99,
         };
         h.write_into(&mut buf);
         assert_eq!(&buf[0..16], MAGIC);
@@ -120,6 +125,7 @@ mod tests {
         let back = DbHeader::read_from(&buf).unwrap();
         assert_eq!(back.db_size_pages, 42);
         assert_eq!(back.change_counter, 7);
+        assert_eq!(back.user_version, 99);
     }
 
     #[test]

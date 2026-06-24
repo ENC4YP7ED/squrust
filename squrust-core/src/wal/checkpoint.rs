@@ -40,6 +40,12 @@ impl WriteAheadLog {
         // physically present so stock sqlite reads the whole file; the change
         // counter doubles as version-valid-for (set inside `write_into`).
         let db_size = file.page_count()?.max(inner.db_size);
+        // Preserve `PRAGMA user_version`: read it back from page 1 (which now
+        // reflects any committed change) before rewriting the header region.
+        let user_version = file
+            .read_page(1)?
+            .map(|p| u32::from_be_bytes([p[60], p[61], p[62], p[63]]))
+            .unwrap_or(0);
         let header = DbHeader {
             page_size: crate::page::PAGE_SIZE as u32,
             db_size_pages: db_size,
@@ -47,6 +53,7 @@ impl WriteAheadLog {
             schema_cookie: 1,
             freelist_trunk: 0,
             freelist_count: 0,
+            user_version,
         };
         file.write_header(&header)?;
         file.sync()?;

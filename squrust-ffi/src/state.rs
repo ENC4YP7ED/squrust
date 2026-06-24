@@ -120,13 +120,13 @@ impl StmtState {
                     tx.rollback();
                 }
             }
-            "PRAGMA" | "EXPLAIN" => {
-                // No-ops that produce no rows.
+            "EXPLAIN" => {
+                // No-op that produces no rows.
                 self.is_query = true;
                 self.columns.clear();
                 self.rows.clear();
             }
-            "SELECT" | "WITH" | "VALUES" => {
+            "SELECT" | "WITH" | "VALUES" | "PRAGMA" => {
                 self.is_query = true;
                 // Inside a transaction, read its own uncommitted writes.
                 let source: ReadSource = match &db.tx {

@@ -10,6 +10,7 @@ pub mod error;
 pub mod executor;
 pub mod parser;
 pub mod planner;
+pub mod pragma;
 pub mod row;
 pub mod schema;
 pub mod types;
@@ -135,6 +136,10 @@ impl SqlEngine {
         sql: &str,
         params: &[Value],
     ) -> Result<Box<dyn Executor>> {
+        if let Some(p) = pragma::try_parse(sql) {
+            let (columns, rows) = self.run_pragma(&p)?;
+            return Ok(Box::new(executor::RowsExec::new(columns, rows)));
+        }
         let stmt = single_statement(sql)?;
         match self.plan_stmt(&stmt)? {
             Plan::Query { plan, .. } => {
@@ -144,6 +149,79 @@ impl SqlEngine {
             _ => Err(SqlError::Unsupported(
                 "query() requires a SELECT statement; use execute() for DML/DDL".into(),
             )),
+        }
+    }
+
+    /// Handle a `PRAGMA`, returning result columns and rows (empty for a "set"
+    /// pragma). Supports `table_info`, `foreign_keys`, `user_version`, and
+    /// `journal_mode`; any other pragma is accepted as a no-op with no rows.
+    fn run_pragma(&self, p: &pragma::Pragma) -> Result<(Vec<ColumnInfo>, Vec<Vec<Value>>)> {
+        let col = |name: &str| ColumnInfo {
+            name: name.to_string(),
+            table: None,
+            decl_type: None,
+        };
+        match p.name.as_str() {
+            "table_info" => {
+                let tname = p.arg.as_deref().ok_or_else(|| {
+                    SqlError::Unsupported("table_info requires a table name".into())
+                })?;
+                let catalog = self.catalog.lock().unwrap();
+                let table = match catalog.get_table(tname) {
+                    Some(t) => t,
+                    None => return Ok((vec![], vec![])),
+                };
+                let columns = ["cid", "name", "type", "notnull", "dflt_value", "pk"]
+                    .iter()
+                    .map(|n| col(n))
+                    .collect();
+                let rows = table
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        vec![
+                            Value::Integer(i as i64),
+                            Value::Text(c.name.clone()),
+                            Value::Text(c.decl_type.clone()),
+                            Value::Integer(c.not_null as i64),
+                            default_pragma_text(&c.default),
+                            Value::Integer(c.primary_key as i64),
+                        ]
+                    })
+                    .collect();
+                Ok((columns, rows))
+            }
+            "foreign_keys" => {
+                if p.value.is_some() {
+                    Ok((vec![], vec![])) // we don't enforce FKs; accept the set
+                } else {
+                    Ok((vec![col("foreign_keys")], vec![vec![Value::Integer(0)]]))
+                }
+            }
+            "user_version" => match &p.value {
+                Some(v) => {
+                    let n: i64 = v
+                        .trim()
+                        .parse()
+                        .map_err(|_| SqlError::Parse("user_version must be an integer".into()))?;
+                    self.storage.set_user_version(n as u32)?;
+                    Ok((vec![], vec![]))
+                }
+                None => {
+                    let uv = self.storage.user_version()?;
+                    Ok((vec![col("user_version")], vec![vec![Value::Integer(uv as i64)]]))
+                }
+            },
+            "journal_mode" => {
+                // Squrust is WAL-based; a "set" echoes the requested mode.
+                let mode = match &p.value {
+                    Some(v) => v.to_ascii_lowercase(),
+                    None => "wal".to_string(),
+                };
+                Ok((vec![col("journal_mode")], vec![vec![Value::Text(mode)]]))
+            }
+            _ => Ok((vec![], vec![])),
         }
     }
 
@@ -187,6 +265,10 @@ impl SqlEngine {
     /// Execute one or more statements, returning the rows affected by the last
     /// data-modification statement (0 for DDL / SELECT).
     pub async fn execute(&self, sql: &str, params: &[Value]) -> Result<u64> {
+        if let Some(p) = pragma::try_parse(sql) {
+            self.run_pragma(&p)?;
+            return Ok(0);
+        }
         let statements = parser::parse(sql)?;
         let mut affected = 0u64;
         for stmt in &statements {
@@ -304,4 +386,20 @@ fn single_statement(sql: &str) -> Result<sqlparser::ast::Statement> {
         )));
     }
     Ok(statements.pop().unwrap())
+}
+
+/// Render a column default as SQLite's `table_info.dflt_value` text.
+fn default_pragma_text(d: &Option<schema::DefaultExpr>) -> Value {
+    use schema::DefaultExpr;
+    match d {
+        None => Value::Null,
+        Some(DefaultExpr::Value(Value::Null)) => Value::Text("NULL".into()),
+        Some(DefaultExpr::Value(Value::Text(s))) => {
+            Value::Text(format!("'{}'", s.replace('\'', "''")))
+        }
+        Some(DefaultExpr::Value(v)) => Value::Text(v.to_display_string()),
+        Some(DefaultExpr::CurrentTimestamp) => Value::Text("CURRENT_TIMESTAMP".into()),
+        Some(DefaultExpr::CurrentDate) => Value::Text("CURRENT_DATE".into()),
+        Some(DefaultExpr::CurrentTime) => Value::Text("CURRENT_TIME".into()),
+    }
 }

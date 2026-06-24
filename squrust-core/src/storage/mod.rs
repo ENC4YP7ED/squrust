@@ -188,6 +188,33 @@ impl StorageEngine {
     pub fn page_count(&self) -> u32 {
         *self.page_count.lock()
     }
+
+    /// Read `PRAGMA user_version` (header offset 60 of page 1).
+    pub fn user_version(self: &Arc<Self>) -> Result<u32> {
+        let page = self.begin_read().get_page(1)?;
+        Ok(u32::from_be_bytes([
+            page.data[60],
+            page.data[61],
+            page.data[62],
+            page.data[63],
+        ]))
+    }
+
+    /// Set `PRAGMA user_version`. Patches just the four header bytes of page 1
+    /// through a write transaction so the change is journalled and durable.
+    pub fn set_user_version(self: &Arc<Self>, v: u32) -> Result<()> {
+        let tx = self.begin_write();
+        let src = tx.get_page(1)?;
+        let mut page = RawPage {
+            id: 1,
+            data: src.data.clone(),
+            dirty: true,
+        };
+        page.data[60..64].copy_from_slice(&v.to_be_bytes());
+        tx.write_page(page)?;
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 fn with_wal_suffix(path: &Path) -> PathBuf {

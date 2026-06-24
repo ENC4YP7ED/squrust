@@ -74,6 +74,32 @@ impl Executor for DualExec {
     }
 }
 
+/// An executor over a fixed, pre-computed set of rows (used by `PRAGMA`).
+pub struct RowsExec {
+    columns: Vec<ColumnInfo>,
+    rows: std::vec::IntoIter<Row>,
+}
+
+impl RowsExec {
+    pub fn new(columns: Vec<ColumnInfo>, rows: Vec<Vec<Value>>) -> Self {
+        let rows: Vec<Row> = rows.into_iter().map(|v| Row::new(0, v)).collect();
+        RowsExec {
+            columns,
+            rows: rows.into_iter(),
+        }
+    }
+}
+
+#[async_trait]
+impl Executor for RowsExec {
+    fn columns(&self) -> &[ColumnInfo] {
+        &self.columns
+    }
+    async fn next(&mut self) -> Result<Option<Row>> {
+        Ok(self.rows.next())
+    }
+}
+
 /// Build an executor tree from a logical plan.
 pub fn build(plan: LogicalPlan, tx: ReadSource, params: Params) -> Box<dyn Executor> {
     match plan {

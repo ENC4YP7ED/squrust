@@ -60,9 +60,10 @@ pub fn column_from_ast(col: &ColumnDef) -> Column {
     for opt in &col.options {
         match &opt.option {
             ColumnOption::NotNull => not_null = true,
+            // PRIMARY KEY does not imply NOT NULL in a rowid table (SQLite
+            // reports notnull=0 and allows NULL, which becomes the rowid).
             ColumnOption::Unique { is_primary, .. } if *is_primary => {
                 primary_key = true;
-                not_null = true;
             }
             ColumnOption::Unique { .. } => unique = true,
             ColumnOption::Default(expr) => default = Some(default_from_expr(expr)),
