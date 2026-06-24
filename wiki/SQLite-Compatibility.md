@@ -88,6 +88,9 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
 - **CTEs (`WITH`):** non-recursive — multiple CTEs, explicit column lists
   (`WITH c(a,b) AS …`), aggregating CTEs, and CTEs used in joins. Each is
   inlined where its name appears in `FROM`.
+- **Set operations:** `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`. `UNION ALL`
+  preserves order; the others deduplicate and order by all columns (as SQLite's
+  sorter-based dedup does). `ORDER BY`/`LIMIT` bind to the whole compound.
 - **Transactions:** `BEGIN`/`COMMIT`/`ROLLBACK` (through the async and C APIs).
 - **Type affinity:** SQLite's rules — BLOB/NONE does no conversion, INTEGER
   keeps fractional reals as real, TEXT stringifies numbers.
@@ -124,7 +127,7 @@ These are **not** implemented yet (a non-exhaustive list):
 - `RIGHT`/`FULL` outer joins, `USING`/`NATURAL` join syntax, hash joins.
 - **Correlated subqueries** (those referencing an outer column; non-correlated
   ones work — see Supported), **recursive** CTEs (`WITH RECURSIVE`; plain `WITH`
-  works), set operations (`UNION`/`INTERSECT`/`EXCEPT`).
+  works).
 - **Window functions.**
 - **`ALTER TABLE`** other than `ADD COLUMN` (rename table/column, drop column),
   foreign keys, triggers, views, `AUTOINCREMENT` semantics (plain rowid
