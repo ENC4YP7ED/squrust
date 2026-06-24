@@ -2,7 +2,8 @@
 //! DDL execution and by catalog loading on open.
 
 use sqlparser::ast::{
-    ColumnOption, CreateIndex, CreateTable, Expr as SqlExpr, Statement, Value as SqlValue,
+    ColumnDef, ColumnOption, CreateIndex, CreateTable, Expr as SqlExpr, Statement,
+    Value as SqlValue,
 };
 
 use crate::error::{Result, SqlError};
@@ -30,41 +31,11 @@ pub fn table_from_ast(ct: &CreateTable, sql: &str) -> Result<Table> {
     let mut rowid_alias = None;
 
     for (idx, col) in ct.columns.iter().enumerate() {
-        let decl_type = col.data_type.to_string();
-        let sql_type = SqlType::affinity_from_decl(&decl_type);
-        let mut not_null = false;
-        let mut primary_key = false;
-        let mut unique = false;
-        let mut default = None;
-
-        for opt in &col.options {
-            match &opt.option {
-                ColumnOption::NotNull => not_null = true,
-                ColumnOption::Unique { is_primary, .. } if *is_primary => {
-                    primary_key = true;
-                    not_null = true;
-                }
-                ColumnOption::Unique { .. } => unique = true,
-                ColumnOption::Default(expr) => {
-                    default = Some(default_from_expr(expr));
-                }
-                _ => {}
-            }
-        }
-
-        if primary_key && sql_type == SqlType::Integer && rowid_alias.is_none() {
+        let column = column_from_ast(col);
+        if column.primary_key && column.sql_type == SqlType::Integer && rowid_alias.is_none() {
             rowid_alias = Some(idx);
         }
-
-        columns.push(Column {
-            name: col.name.value.clone(),
-            decl_type,
-            sql_type,
-            not_null,
-            primary_key,
-            unique,
-            default,
-        });
+        columns.push(column);
     }
 
     Ok(Table {
@@ -74,6 +45,40 @@ pub fn table_from_ast(ct: &CreateTable, sql: &str) -> Result<Table> {
         rowid_alias,
         sql: sql.to_string(),
     })
+}
+
+/// Build a schema [`Column`] from a parsed column definition. Shared by
+/// `CREATE TABLE` and `ALTER TABLE ADD COLUMN`.
+pub fn column_from_ast(col: &ColumnDef) -> Column {
+    let decl_type = col.data_type.to_string();
+    let sql_type = SqlType::affinity_from_decl(&decl_type);
+    let mut not_null = false;
+    let mut primary_key = false;
+    let mut unique = false;
+    let mut default = None;
+
+    for opt in &col.options {
+        match &opt.option {
+            ColumnOption::NotNull => not_null = true,
+            ColumnOption::Unique { is_primary, .. } if *is_primary => {
+                primary_key = true;
+                not_null = true;
+            }
+            ColumnOption::Unique { .. } => unique = true,
+            ColumnOption::Default(expr) => default = Some(default_from_expr(expr)),
+            _ => {}
+        }
+    }
+
+    Column {
+        name: col.name.value.clone(),
+        decl_type,
+        sql_type,
+        not_null,
+        primary_key,
+        unique,
+        default,
+    }
 }
 
 pub fn parse_create_index(sql: &str) -> Result<Index> {

@@ -443,3 +443,27 @@ async fn group_concat_aggregate() {
     let r = rows(&eng, "SELECT group_concat(x) FROM n", &[]).await;
     assert_eq!(r[0][0], Value::Null);
 }
+
+#[tokio::test]
+async fn alter_table_add_column() {
+    let eng = engine().await;
+    eng.execute_ddl("CREATE TABLE t(a INTEGER, b TEXT)").await.unwrap();
+    eng.execute("INSERT INTO t VALUES (1,'x'),(2,'y')", &[]).await.unwrap();
+
+    // Add a column with no default: old rows read NULL for it.
+    eng.execute_ddl("ALTER TABLE t ADD COLUMN c TEXT").await.unwrap();
+    // Add a column with a constant default: old rows read the default.
+    eng.execute_ddl("ALTER TABLE t ADD COLUMN d INTEGER DEFAULT 7").await.unwrap();
+
+    let r = rows(&eng, "SELECT a, b, c, d FROM t ORDER BY a", &[]).await;
+    assert_eq!(r[0], vec![Value::Integer(1), Value::Text("x".into()), Value::Null, Value::Integer(7)]);
+    assert_eq!(r[1], vec![Value::Integer(2), Value::Text("y".into()), Value::Null, Value::Integer(7)]);
+
+    // New rows can populate the added columns.
+    eng.execute("INSERT INTO t VALUES (3,'z','new',99)", &[]).await.unwrap();
+    let r = rows(&eng, "SELECT c, d FROM t WHERE a = 3", &[]).await;
+    assert_eq!(r[0], vec![Value::Text("new".into()), Value::Integer(99)]);
+
+    // Duplicate column name is rejected.
+    assert!(eng.execute_ddl("ALTER TABLE t ADD COLUMN b TEXT").await.is_err());
+}

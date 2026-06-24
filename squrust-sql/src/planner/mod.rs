@@ -5,8 +5,8 @@ pub mod optimizer;
 pub mod resolver;
 
 use sqlparser::ast::{
-    Expr as SqlExpr, Insert, Query, Select, SelectItem, SetExpr, SqliteOnConflict, Statement,
-    TableFactor,
+    AlterTableOperation, Expr as SqlExpr, Insert, ObjectName, Query, Select, SelectItem, SetExpr,
+    SqliteOnConflict, Statement, TableFactor,
 };
 
 use squrust_core::PageId;
@@ -74,6 +74,9 @@ pub enum LogicalPlan {
         root_page: PageId,
         columns: Vec<ColumnInfo>,
         rowid_alias: Option<usize>,
+        /// Per-column constant default, used to pad records that predate an
+        /// `ALTER TABLE ADD COLUMN` (they have fewer stored columns).
+        defaults: Vec<crate::types::Value>,
     },
     Filter {
         input: Box<LogicalPlan>,
@@ -179,6 +182,12 @@ pub enum Plan {
         name: String,
         if_exists: bool,
     },
+    AlterTableAddColumn {
+        table: String,
+        column: crate::schema::Column,
+        /// Rewritten `CREATE TABLE` text for `sqlite_master`.
+        new_sql: String,
+    },
 }
 
 /// Translate one parsed statement into a [`Plan`].
@@ -231,6 +240,9 @@ pub fn plan(stmt: &Statement, catalog: &Catalog) -> Result<Plan> {
                 if_exists: *if_exists,
             })
         }
+        Statement::AlterTable {
+            name, operations, ..
+        } => plan_alter_table(name, operations, catalog),
         other => Err(SqlError::Unsupported(format!("statement: {other}"))),
     }
 }
@@ -258,6 +270,96 @@ fn decl_opt(decl: &str) -> Option<String> {
     }
 }
 
+fn plan_alter_table(
+    name: &ObjectName,
+    operations: &[AlterTableOperation],
+    catalog: &Catalog,
+) -> Result<Plan> {
+    let table_name = ddl::object_name_to_string(name);
+    let table = lookup(catalog, &table_name)?;
+
+    // SQLite applies one operation per ALTER TABLE; we support ADD COLUMN.
+    let op = match operations {
+        [op] => op,
+        _ => {
+            return Err(SqlError::Unsupported(
+                "only a single ALTER TABLE operation is supported".into(),
+            ));
+        }
+    };
+    let (column_def, if_not_exists) = match op {
+        AlterTableOperation::AddColumn {
+            column_def,
+            if_not_exists,
+            ..
+        } => (column_def, *if_not_exists),
+        other => {
+            return Err(SqlError::Unsupported(format!("ALTER TABLE {other}")));
+        }
+    };
+
+    let column = ddl::column_from_ast(column_def);
+
+    if table.column(&column.name).is_some() {
+        if if_not_exists {
+            // No-op: report success without rewriting anything.
+            return Ok(Plan::AlterTableAddColumn {
+                table: table_name,
+                column,
+                new_sql: table.sql.clone(),
+            });
+        }
+        return Err(SqlError::Constraint(format!(
+            "duplicate column name: {}",
+            column.name
+        )));
+    }
+
+    // SQLite's restrictions on ADD COLUMN.
+    if column.primary_key {
+        return Err(SqlError::Unsupported(
+            "cannot add a PRIMARY KEY column".into(),
+        ));
+    }
+    if column.unique {
+        return Err(SqlError::Unsupported("cannot add a UNIQUE column".into()));
+    }
+    match &column.default {
+        // A NOT NULL column needs a default to backfill existing rows.
+        None if column.not_null => {
+            return Err(SqlError::Constraint(
+                "cannot add a NOT NULL column with no default value".into(),
+            ));
+        }
+        // The default must be a constant (CURRENT_* / expressions are rejected,
+        // matching SQLite — old rows are padded with this constant on read).
+        Some(crate::schema::DefaultExpr::Value(_)) | None => {}
+        Some(_) => {
+            return Err(SqlError::Unsupported(
+                "cannot add a column with a non-constant default".into(),
+            ));
+        }
+    }
+
+    // Splice the new column definition into the stored CREATE TABLE text, just
+    // before its closing paren — exactly how SQLite rewrites sqlite_master.
+    let old_sql = &table.sql;
+    let pos = old_sql
+        .rfind(')')
+        .ok_or_else(|| SqlError::Schema("malformed CREATE TABLE text".into()))?;
+    let mut new_sql = String::with_capacity(old_sql.len() + 32);
+    new_sql.push_str(old_sql[..pos].trim_end());
+    new_sql.push_str(", ");
+    new_sql.push_str(&column_def.to_string());
+    new_sql.push_str(&old_sql[pos..]);
+
+    Ok(Plan::AlterTableAddColumn {
+        table: table_name,
+        column,
+        new_sql,
+    })
+}
+
 fn scan_for(table: &Table) -> LogicalPlan {
     LogicalPlan::Scan {
         table: table.name.clone(),
@@ -272,6 +374,14 @@ fn scan_for(table: &Table) -> LogicalPlan {
             })
             .collect(),
         rowid_alias: table.rowid_alias,
+        defaults: table
+            .columns
+            .iter()
+            .map(|c| match &c.default {
+                Some(crate::schema::DefaultExpr::Value(v)) => v.clone(),
+                _ => crate::types::Value::Null,
+            })
+            .collect(),
     }
 }
 

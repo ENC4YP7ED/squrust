@@ -81,8 +81,11 @@ pub fn build(plan: LogicalPlan, tx: ReadSource, params: Params) -> Box<dyn Execu
             root_page,
             columns,
             rowid_alias,
+            defaults,
             ..
-        } => Box::new(scan::TableScan::new(tx, root_page, columns, rowid_alias)),
+        } => Box::new(scan::TableScan::new(
+            tx, root_page, columns, rowid_alias, defaults,
+        )),
         LogicalPlan::Filter { input, predicate } => {
             let inner = build(*input, tx, params.clone());
             Box::new(filter::FilterExec::new(inner, predicate, params))

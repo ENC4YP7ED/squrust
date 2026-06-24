@@ -7,6 +7,7 @@ use crate::error::Result;
 use crate::executor::{Executor, ReadSource};
 use crate::planner::ColumnInfo;
 use crate::row::Row;
+use crate::types::Value;
 
 pub struct TableScan {
     tx: ReadSource,
@@ -14,6 +15,9 @@ pub struct TableScan {
     columns: Vec<ColumnInfo>,
     /// Index of the column that aliases the rowid (`INTEGER PRIMARY KEY`).
     rowid_alias: Option<usize>,
+    /// Per-column constant defaults; pads records written before an
+    /// `ALTER TABLE ADD COLUMN` widened the schema.
+    defaults: Vec<Value>,
     next_key: i64,
     done: bool,
 }
@@ -24,12 +28,14 @@ impl TableScan {
         root: PageId,
         columns: Vec<ColumnInfo>,
         rowid_alias: Option<usize>,
+        defaults: Vec<Value>,
     ) -> Self {
         TableScan {
             tx,
             root,
             columns,
             rowid_alias,
+            defaults,
             next_key: i64::MIN,
             done: false,
         }
@@ -52,10 +58,16 @@ impl Executor for TableScan {
         match cursor.next()? {
             Some((key, bytes)) => {
                 let mut row = Row::decode(key, &bytes)?;
+                // Records written before an ADD COLUMN are short; pad the
+                // trailing columns with their constant defaults.
+                if row.values.len() < self.columns.len() {
+                    row.values
+                        .extend_from_slice(&self.defaults[row.values.len()..]);
+                }
                 // The rowid-alias column is stored as NULL; its value is the rowid.
                 if let Some(a) = self.rowid_alias {
                     if a < row.values.len() {
-                        row.values[a] = crate::types::Value::Integer(key);
+                        row.values[a] = Value::Integer(key);
                     }
                 }
                 match key.checked_add(1) {

@@ -98,6 +98,44 @@ impl Catalog {
         Ok(())
     }
 
+    /// Append a column to a table: rewrite its `sqlite_master.sql` in place
+    /// (same rowid and rootpage) and update the in-memory schema. Existing row
+    /// data is left untouched — short records are padded on read.
+    pub fn alter_add_column<S: PageSink>(
+        &mut self,
+        sink: &S,
+        table_name: &str,
+        column: crate::schema::Column,
+        new_sql: String,
+    ) -> Result<()> {
+        let key = table_name.to_ascii_lowercase();
+        let table = self
+            .tables
+            .get_mut(&key)
+            .ok_or_else(|| SqlError::NotFound(format!("table `{table_name}`")))?;
+        let rowid = *self
+            .catalog_ids
+            .get(&key)
+            .ok_or_else(|| SqlError::NotFound(format!("table `{table_name}`")))?;
+
+        let row = Row::new(
+            rowid,
+            vec![
+                Value::Text("table".to_string()),
+                Value::Text(table.name.clone()),
+                Value::Text(table.name.clone()),
+                Value::Integer(table.root_page as i64),
+                Value::Text(new_sql.clone()),
+            ],
+        );
+        let tree = BTree::open(CATALOG_ROOT);
+        tree.insert(sink, rowid, &row.encode())?;
+
+        table.columns.push(column);
+        table.sql = new_sql;
+        Ok(())
+    }
+
     /// Remove a table from the catalog (both persisted and in-memory).
     pub fn drop_table<S: PageSink>(&mut self, sink: &S, name: &str) -> Result<bool> {
         let key = name.to_ascii_lowercase();

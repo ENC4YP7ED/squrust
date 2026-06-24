@@ -280,6 +280,17 @@ impl SqlEngine {
                 }
                 Ok(0)
             }
+            Plan::AlterTableAddColumn {
+                table,
+                column,
+                new_sql,
+            } => {
+                let mut catalog = self.catalog.lock().unwrap();
+                let tx = self.storage.begin_write();
+                catalog.alter_add_column(&tx, &table, column, new_sql)?;
+                tx.commit()?;
+                Ok(0)
+            }
         }
     }
 }
