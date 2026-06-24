@@ -13,7 +13,8 @@ discuss.
 - **Constraint enforcement** — extend `UNIQUE` to `UPDATE`/`DELETE` (enforced on
   `INSERT` today, by scan) and to non-rowid `PRIMARY KEY`, then back it with
   index b-trees instead of a full scan.
-- **Joins** — 3+ tables, comma joins, `RIGHT`/`FULL` outer, hash joins.
+- **Joins** — `RIGHT`/`FULL` outer, `USING`/`NATURAL`, hash joins (inner,
+  left-outer, cross, comma, and 3+ tables already work via nested loop).
 - **Subqueries / CTEs / set operations**.
 - **`ALTER TABLE`** beyond `ADD COLUMN` (rename table/column, drop column),
   foreign keys, triggers, views.

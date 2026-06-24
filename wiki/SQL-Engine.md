@@ -96,7 +96,8 @@ and runs directly against a `WriteTx`.
   functions, `CASE`, `CAST`.
 - `INSERT` (incl. `INSERT OR REPLACE`, multi-row `VALUES`), `UPDATE`, `DELETE`.
 - `CREATE TABLE` / `CREATE INDEX` / `DROP TABLE` / `ALTER TABLE … ADD COLUMN`.
-- Inner and left-outer **two-table** nested-loop joins.
+- Inner, left-outer, cross, and comma joins over any number of tables
+  (left-deep nested-loop tree).
 - `BEGIN` / `COMMIT` / `ROLLBACK` (real transactions through the [[Async API]]
   and [[C ABI and LD_PRELOAD]]).
 - Row-returning `PRAGMA`s: `table_info`, `foreign_keys`, `user_version`,
@@ -104,4 +105,4 @@ and runs directly against a `WriteTx`.
   rejects `table_info(t)`'s unquoted argument).
 
 See [[SQLite Compatibility]] for what's **not** yet supported (index usage,
-subqueries, 3+ table joins, window/user functions, …).
+subqueries, RIGHT/FULL joins, window/user functions, …).

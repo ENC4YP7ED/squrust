@@ -80,7 +80,8 @@ A parity battery matches stock `sqlite3` **exactly** for the supported features.
 - **Constraints & defaults:** `UNIQUE` enforced on `INSERT`, column `DEFAULT`s
   (incl. `CURRENT_TIMESTAMP`/`CURRENT_DATE`/`CURRENT_TIME`); a violation raises
   `SQLITE_CONSTRAINT` (→ Python `sqlite3.IntegrityError`).
-- **Joins:** inner and left-outer, **two tables**, via nested-loop.
+- **Joins:** inner, left-outer, cross, and comma joins over **any number of
+  tables**, via a left-deep nested-loop tree.
 - **Transactions:** `BEGIN`/`COMMIT`/`ROLLBACK` (through the async and C APIs).
 - **Type affinity:** SQLite's rules — BLOB/NONE does no conversion, INTEGER
   keeps fractional reals as real, TEXT stringifies numbers.
@@ -114,7 +115,7 @@ These are **not** implemented yet (a non-exhaustive list):
 - **Index usage** — the planner always table-scans; `CREATE INDEX` is accepted
   but inert. (`UNIQUE` *is* enforced, but by full scan on `INSERT`, not via an
   index; non-rowid `PRIMARY KEY` isn't enforced yet.)
-- **Joins beyond two tables**, comma joins, `RIGHT`/`FULL` joins, `USING`.
+- `RIGHT`/`FULL` outer joins, `USING`/`NATURAL` join syntax, hash joins.
 - **Subqueries**, CTEs (`WITH`), set operations (`UNION`/`INTERSECT`/`EXCEPT`).
 - **Window functions.**
 - **`ALTER TABLE`** other than `ADD COLUMN` (rename table/column, drop column),
